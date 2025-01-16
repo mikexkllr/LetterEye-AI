@@ -96,14 +96,3 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 Contributions are welcome. Please fork the repository and submit a pull request for any improvements or additional features.
 
----
-
-This updated README includes features describing the CSV handling and directory organizing capabilities. Adjust any placeholder information, such as repository URLs and paths, as needed.
-```
-
-### Key Additions:
-
-- **Organization by CSV Data**: Included details about using CSV files to determine recipient folders.
-- **Feature Enhancements**: Expanded features to reflect new functionalities, especially around CSV handling and folder structuring.
-- **CSV Setup Instructions**: Provided guidance on setting up CSV files for the script.
-  
