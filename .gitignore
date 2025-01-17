@@ -1,2 +1,4 @@
 .env
 output/*
+.venv
+private_files
