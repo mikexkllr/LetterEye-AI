@@ -51,7 +51,7 @@ This project provides a Python script that extracts text from scanned PDF files 
 5. **Prepare the Environment File**:
    Create a `.env` file in the root directory of the project with the following content:
    ```
-   PDF_PATH=path/to/your/file.pdf
+   PDF_FOLDER_PATH=path/to/your/file.pdf
    OPENAI_API_KEY=your_openai_api_key
    LANGUAGE=en  # or any other language you want use
    ```

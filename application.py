@@ -65,13 +65,12 @@ class FolderManager:
         return receiver_folder
 
 class PDFProcessor:
-    def __init__(self, pdf_path, language, api_key):
-        self.pdf_path = pdf_path
+    def __init__(self, language, api_key):
         self.language = language
         self.llm = ChatOpenAI(api_key=api_key, model="gpt-4o-mini")
 
-    def convert_pdf_to_images(self):
-        return convert_from_path(self.pdf_path)
+    def convert_pdf_to_images(self, pdf_path):
+        return convert_from_path(pdf_path)
 
     def perform_ocr(self, images):
         ocr_text = ""
@@ -98,23 +97,22 @@ class PDFProcessor:
             raise
 
 class Application:
-    def __init__(self, pdf_path):
+    def __init__(self):
         load_dotenv()
-        self.pdf_path = pdf_path
         self.openai_api_key = os.getenv('OPENAI_API_KEY')
         self.language = os.getenv('LANGUAGE')
         self.csv_dir = os.getenv('CSV_FILES')
         self.output_dir = 'output'
 
-    def run(self):
-        pdf_processor = PDFProcessor(self.pdf_path, self.language, self.openai_api_key)
+    def run(self, pdf_path):
+        pdf_processor = PDFProcessor(self.language, self.openai_api_key)
         failed_folder = os.path.join(self.output_dir, "failed")
         os.makedirs(failed_folder, exist_ok=True)
-        original_pdf_name = os.path.basename(self.pdf_path)
+        original_pdf_name = os.path.basename(pdf_path)
         images = None
 
         try:
-            images = pdf_processor.convert_pdf_to_images()
+            images = pdf_processor.convert_pdf_to_images(pdf_path)
         except Exception as e:
             print(f"Failed to convert PDF to images: {e}")
             if images:
@@ -171,4 +169,3 @@ class Application:
             failed_path = os.path.join(failed_folder, original_pdf_name)
             pdf_processor.save_pdf(images, failed_path)
             return
-
