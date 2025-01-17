@@ -17,8 +17,9 @@ class LetterDetails(BaseModel):
     receiver: str = Field(..., description="The receiver of the letter. NAME ONLY (no other details)")
     organisation: str = Field(..., description="The organisation/ company/name of the sender - empty if not present or private person")
     date_of_writing: str = Field(..., description="The date the letter was written")
-    type_of_letter: str = Field(..., description="The type of the letter. Maximal 4 words which describes what the letter is about")
+    type_of_letter: str = Field(..., description="The type of the letter. Maximal 5 words which describes a summary what the letter is about")
     short_summary: str = Field(..., description="A summary of the letter")
+    responsible_person: str = Field(..., description="The person responsible for the letter. Name only (no other details)")
 
 class WorkerManager:
     def __init__(self, csv_dir):
@@ -65,9 +66,10 @@ class FolderManager:
         return receiver_folder
 
 class PDFProcessor:
-    def __init__(self, language, api_key):
+    def __init__(self, language, api_key, csv_dir):
         self.language = language
         self.llm = ChatOpenAI(api_key=api_key, model="gpt-4o-mini")
+        self.csv_dir = csv_dir
 
     def convert_pdf_to_images(self, pdf_path):
         return convert_from_path(pdf_path)
@@ -85,12 +87,14 @@ class PDFProcessor:
     def analyze_text(self, ocr_text):
         try:
             prompt_template = (
-                "Extract the sender, receiver with ONLY the name of the person who is receiving this letter, date of writing, type of letter (like a bill, offer, letter of application or anything else you can think of), and provide a summary in this language {language} of the following letter text: {ocr_text}"
+                """
+                    From the text provided, extract the names of the sender and recipient, including only the recipient's name. Identify the date of writing and provide a type of letter classified as an ultra-short summary in a maximum of 5 words. If a responsible person, whose name maybe appears in {responsible_persons_names}, is associated with the recipient, include their name; otherwise, leave that field empty. Provide a summary in {language}. Text: {ocr_text}
+                """
             )
             llm_with_structured_output = self.llm.with_structured_output(LetterDetails)
             prompt = PromptTemplate(template=prompt_template, input_variables=["ocr_text", "language"])
             chain = prompt | llm_with_structured_output
-            response = chain.invoke({"ocr_text": ocr_text, "language": self.language})
+            response = chain.invoke({"ocr_text": ocr_text, "language": self.language, "responsible_persons_names": str(os.listdir(self.csv_dir))})
             return response
         except Exception as e:
             print(f"Failed to analyze text: {e}")
@@ -105,7 +109,7 @@ class Application:
         self.output_dir = 'output'
 
     def run(self, pdf_path):
-        pdf_processor = PDFProcessor(self.language, self.openai_api_key)
+        pdf_processor = PDFProcessor(self.language, self.openai_api_key, self.csv_dir)
         failed_folder = os.path.join(self.output_dir, "failed")
         os.makedirs(failed_folder, exist_ok=True)
         original_pdf_name = os.path.basename(pdf_path)
@@ -148,10 +152,15 @@ class Application:
         print(f"Worker Name: {worker_name}")
 
         if not worker_name:
-            print(f"Receiver {receiver_name} not found in any CSV files.")
-            failed_path = os.path.join(failed_folder, original_pdf_name)
-            pdf_processor.save_pdf(images, failed_path)
-            return
+            if letter_details.responsible_person:
+                worker_name = letter_details.responsible_person
+                matched_receiver = letter_details.receiver
+                csv_filename = f"{worker_name}.csv"
+            else:
+                print(f"Receiver {receiver_name} not found in any CSV files.")
+                failed_path = os.path.join(failed_folder, original_pdf_name)
+                pdf_processor.save_pdf(images, failed_path)
+                return
 
         try:
             folder_manager = FolderManager(self.output_dir)
