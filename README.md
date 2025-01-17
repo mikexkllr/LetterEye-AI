@@ -42,7 +42,7 @@ This project provides a Python script that extracts text from scanned PDF files 
 3. **Install Python Dependencies**:
    Once the virtual environment is activated, use pip to install the necessary packages:
    ```bash
-   pip install python-dotenv pytesseract pdf2image openai langchain langchain_openai
+   pip install python-dotenv pytesseract pdf2image openai langchain langchain_openai fuzzywuzzy python-Levenshtein
    ```
 
 4. **Install Tesseract OCR**:
