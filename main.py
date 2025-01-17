@@ -83,8 +83,19 @@ class PDFProcessor:
             ocr_text += pytesseract.image_to_string(image)
         return ocr_text
 
-    def save_pdf(self, images, receiver_folder):
-        pdf_output_path = os.path.join(receiver_folder, 'output.pdf')
+    # Update the save_pdf method to create a structured filename
+    def save_pdf(self, images, receiver_folder, letter_details: LetterDetails, worker_name):
+        # Construct the filename using the specified format: date, sender organization, worker name, and letter type
+        date_received = letter_details.date_of_writing
+        organization = letter_details.organisation if letter_details.organisation else "Private"
+        worker = worker_name
+        letter_type = letter_details.type_of_letter  # A lol
+
+        # Create a safe filename by removing any unwanted characters
+        filename = f"{date_received}_{organization}_{worker}_{letter_type}.pdf"
+        filename = filename.replace(' ', '_').replace('/', '-').replace('\\', '-')
+
+        pdf_output_path = os.path.join(receiver_folder, filename)
         images[0].save(pdf_output_path, save_all=True, append_images=images[1:])
         return pdf_output_path
 
@@ -134,7 +145,7 @@ class Application:
         folder_manager = FolderManager(self.output_dir)
         receiver_folder = folder_manager.find_or_create_folder(worker_name, matched_receiver)
 
-        pdf_processor.save_pdf(images, receiver_folder)
+        pdf_processor.save_pdf(images, receiver_folder, letter_details, worker_name)
 
 # Entry point for the application
 if __name__ == "__main__":
