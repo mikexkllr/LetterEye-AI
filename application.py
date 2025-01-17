@@ -164,6 +164,10 @@ class Application:
             filename = f"{date_received}_{organization}_{worker}_{letter_type}.pdf".replace(' ', '_').replace('/', '-').replace('\\', '-')
             pdf_output_path = os.path.join(receiver_folder, filename)
             pdf_processor.save_pdf(images, pdf_output_path)
+
+                
+            # Delete the original PDF if saved successfully
+            os.remove(pdf_path)
         except Exception as e:
             print(f"Failed to save PDF to structured folder: {e}")
             failed_path = os.path.join(failed_folder, original_pdf_name)
