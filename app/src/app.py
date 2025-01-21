@@ -17,9 +17,7 @@ class Application:
 
         self.watcher = Watcher(self.openai_api_key, self.language, self.csv_dir)
 
-
-
-    def start_watching(self, folder_to_watch, output_path):
+    def start_watching(self, folder_to_watch, output_path, stop_event: Event):
         # self.gui.logic to start watching the folder and process files
         self.gui.log_message(f"Watching folder: {folder_to_watch}\n")
         # Implement file watching logic here
@@ -36,10 +34,4 @@ class Application:
             self.gui.log_message("Please provide a folder to watch.\n")
             return
 
-        self.watcher.start(self.output_dir, self.folder_to_watch, self.gui.log_text)
-
-    def stop_watching(self):
-        print("Stopping the process...")
-        # self.gui.logic to stop watching the folder
-        self.watcher.stop()
-        pass
+        self.watcher.start(self.output_dir, self.folder_to_watch, self.gui.log_text, stop_event)

@@ -1,6 +1,6 @@
 import os
 import time
-from tkinter import Text
+from tkinter import END, Text
 from dotenv import load_dotenv
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -37,21 +37,17 @@ class Watcher:
         self.csv_dir = csv_dir
         self.observer = Observer()
 
-    def start(self, output_dir: str, folder_to_watch: str, log: Text):
-        print(f"Watching folder: {folder_to_watch}")
+    def start(self, output_dir: str, folder_to_watch: str, log: Text, stop_event):
+        log.insert(END, f"Watching folder: {folder_to_watch}")
         self.app = CoreApplication(self.openai_api_key, self.language, self.csv_dir, output_dir)
         self.event_handler = PDFHandler(self.app)
         self.observer.schedule(self.event_handler, folder_to_watch, recursive=False)
         self.observer.start()
         try:
-            while True:
+            while not stop_event.is_set():
                 time.sleep(1)
         except KeyboardInterrupt:
             self.observer.stop()
-        self.observer.join()
-
-    def stop(self):
-        self.observer.stop()
         self.observer.join()
     
 

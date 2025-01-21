@@ -1,5 +1,5 @@
 
-# PDF Text Extraction and Analysis Script
+# PDF Text Extraction and Analysis
 
 This project provides a Python script that extracts text from scanned PDF files using Optical Character Recognition (OCR) and analyzes the extracted text using the OpenAI API. The script is specifically designed for processing letters and aims to extract key information such as the sender, recipient, date, type of letter, and a short summary. Additionally, it organizes output PDFs into directories based on the worker and recipient names retrieved from CSV files.
 
