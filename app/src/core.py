@@ -100,13 +100,13 @@ class PDFProcessor:
             print(f"Failed to analyze text: {e}")
             raise
 
-class Application:
-    def __init__(self):
-        load_dotenv()
-        self.openai_api_key = os.getenv('OPENAI_API_KEY')
-        self.language = os.getenv('LANGUAGE')
-        self.csv_dir = os.getenv('CSV_FILES')
-        self.output_dir = 'output'
+class CoreApplication:
+    def __init__(self, openai_api_key, language, csv_dir, output_dir):
+        self.openai_api_key = openai_api_key
+        self.language = language
+        self.csv_dir = csv_dir
+        self.output_dir = output_dir
+
 
     def run(self, pdf_path):
         pdf_processor = PDFProcessor(self.language, self.openai_api_key, self.csv_dir)

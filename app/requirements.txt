@@ -1,0 +1,11 @@
+Tkinter
+watchdog
+python-dotenv
+pytesseract 
+pdf2image 
+openai 
+langchain 
+langchain_openai 
+fuzzywuzzy 
+python-Levenshtein 
+watchdog
