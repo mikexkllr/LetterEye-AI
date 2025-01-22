@@ -58,12 +58,10 @@ class GUI:
         self.log_text.insert(END, f"Output path: {output_path}\n")
         self.log_text.see(END)
 
-        if self.thread is None:
+        if self.thread is None or not self.thread.is_alive():
             self.thread = threading.Thread(target=self.trigger_start_watching, args=(folder_to_watch, output_path))
-
-        if not self.thread.is_alive():
             self.thread.start()
-
+        
         self.start_button.config(text="Stop", command=self.stop_process)
 
     def trigger_start_watching(self, folder_to_watch, output_path):

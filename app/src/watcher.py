@@ -48,6 +48,8 @@ class Watcher:
                 time.sleep(1)
         except KeyboardInterrupt:
             self.observer.stop()
-        self.observer.join()
+        finally:
+            self.observer.stop()
+            self.observer.join()
     
 
