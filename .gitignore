@@ -5,3 +5,4 @@ private_files
 pdf_folder
 __pycache__
 app/src/__pycache__
+.DS_Store
