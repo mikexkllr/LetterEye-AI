@@ -127,7 +127,7 @@ class CoreApplication:
 
         try:
             ocr_text = pdf_processor.perform_ocr(images)
-            pub.sendMessage('log_event', message="OCR Text: " + ocr_text)
+            pub.sendMessage('print_event', message="OCR Text: " + ocr_text)
         except Exception as e:
             pub.sendMessage('log_event', message=f"OCR failed: {e}")
             failed_path = os.path.join(failed_folder, original_pdf_name)

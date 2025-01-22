@@ -8,7 +8,10 @@ class GUI:
         self.master = master
         self.thread = None
         self.stop_event = threading.Event()
+
         pub.subscribe(self.log_message, 'log_event')
+        pub.subscribe(self.print_message, 'print_event')
+
 
         self.label_folder = Label(master, text="Folder to Watch:")
         self.label_folder.pack()
@@ -69,6 +72,9 @@ class GUI:
         self.stop_event.clear()
         app = Application()
         app.start_watching(folder_to_watch, output_path, self.stop_event)
+
+    def print_message(self, message):
+        print(message)
 
     def stop_process(self):
         self.stop_event.set()
