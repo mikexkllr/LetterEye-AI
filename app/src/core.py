@@ -125,7 +125,7 @@ class CoreApplication:
         if not worker_name:
             return
 
-        self.save_pdf_to_folder(images, pdf_path, letter_details, worker_name, matched_receiver)
+        self.save_pdf_to_folder(pdf_path, letter_details, worker_name, matched_receiver)
 
     def convert_pdf_to_images(self, pdf_path):
         pdf_processor = PDFProcessor(self.language, self.openai_api_key, self.csv_dir)
@@ -182,7 +182,7 @@ class CoreApplication:
 
         return worker_name, csv_filename, matched_receiver
 
-    def save_pdf_to_folder(self, images, pdf_path, letter_details, worker_name, matched_receiver):
+    def save_pdf_to_folder(self, pdf_path, letter_details, worker_name, matched_receiver):
         pdf_processor = PDFProcessor(self.language, self.openai_api_key, self.csv_dir)
         failed_folder = os.path.join(self.output_dir, "failed")
         os.makedirs(failed_folder, exist_ok=True)
@@ -198,11 +198,15 @@ class CoreApplication:
 
             filename = f"{date_received}_{organization}_{worker}_{letter_type}.pdf".replace(' ', '_').replace('/', '-').replace('\\', '-')
             pdf_output_path = os.path.join(receiver_folder, filename)
-            pdf_processor.save_pdf(images, pdf_output_path)
+            
+            # Copy the original PDF to the new location
+            shutil.copy2(pdf_path, pdf_output_path)
+            pub.sendMessage('log_event', message=f"PDF saved to: {pdf_output_path}")
+
 
             # Delete the original PDF if saved successfully
             os.remove(pdf_path)
         except Exception as e:
             pub.sendMessage('log_event', message=f"Failed to save PDF to structured folder: {e}")
             failed_path = os.path.join(failed_folder, original_pdf_name)
-            pdf_processor.save_pdf(images, failed_path)
+            shutil.copy2(pdf_path, failed_path)
