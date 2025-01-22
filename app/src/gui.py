@@ -78,5 +78,6 @@ class GUI:
 
     def log_message(self, message):
         print(message)
+        print("_________________________________")
         self.log_text.insert(END, message + "\n")
         self.log_text.see(END)

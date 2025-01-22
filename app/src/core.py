@@ -137,7 +137,7 @@ class CoreApplication:
         try:
             letter_details = pdf_processor.analyze_text(ocr_text)
             pub.sendMessage('log_event', message="Extracted Details:")
-            pub.sendMessage('log_event', message=letter_details)
+            pub.sendMessage('log_event', message=str(letter_details))
         except Exception as e:
             pub.sendMessage('log_event', message=f"Failed to extract letter details: {e}")
             failed_path = os.path.join(failed_folder, original_pdf_name)
