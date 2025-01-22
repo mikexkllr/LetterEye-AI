@@ -9,7 +9,7 @@ import os
 class PDFProcessor:
     def __init__(self, language, api_key, csv_dir):
         self.language = language
-        self.llm = ChatOpenAI(api_key=api_key, model="gpt-4o-mini")
+        self.llm = ChatOpenAI(api_key=api_key, model="gpt-4o")
         self.csv_dir = csv_dir
 
     def convert_pdf_to_images(self, pdf_path):
