@@ -3,3 +3,5 @@ output/*
 .venv
 private_files
 pdf_folder
+__pycache__
+app/src/__pycache__/*

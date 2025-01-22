@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from app.src.core import CoreApplication
+from pubsub import pub
 
 class PDFHandler(FileSystemEventHandler):
     def __init__(self, app):
@@ -14,7 +15,7 @@ class PDFHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         if event.src_path.endswith('.pdf'):
-            print(f"New PDF file detected: {event.src_path}")
+            pub.sendMessage('log_event', message=f"New PDF file detected: {event.src_path}")
             if self._wait_for_file(event.src_path):
                 self.app.run(event.src_path)
 
@@ -27,7 +28,7 @@ class PDFHandler(FileSystemEventHandler):
             if initial_size == new_size:
                 return True
             attempts += 1
-        print(f"Failed to fully copy the file: {file_path}")
+        pub.sendMessage('log_event', message=f"Failed to fully copy the file: {file_path}")
         return False
     
 class Watcher:
@@ -37,8 +38,8 @@ class Watcher:
         self.csv_dir = csv_dir
         self.observer = Observer()
 
-    def start(self, output_dir: str, folder_to_watch: str, log: Text, stop_event):
-        log.insert(END, f"Watching folder: {folder_to_watch}")
+    def start(self, output_dir: str, folder_to_watch: str, stop_event):
+        pub.sendMessage('log_event', message=f"Watching folder: {folder_to_watch}")
         self.app = CoreApplication(self.openai_api_key, self.language, self.csv_dir, output_dir)
         self.event_handler = PDFHandler(self.app)
         self.observer.schedule(self.event_handler, folder_to_watch, recursive=False)

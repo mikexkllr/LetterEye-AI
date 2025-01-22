@@ -1,6 +1,6 @@
 import threading
 from tkinter import END, LEFT, X, Button, Entry, Frame, Label, Text, filedialog
-
+from pubsub import pub
 from app.src.app import Application
 
 class GUI:
@@ -8,6 +8,7 @@ class GUI:
         self.master = master
         self.thread = None
         self.stop_event = threading.Event()
+        pub.subscribe(self.log_message, 'log_event')
 
         self.label_folder = Label(master, text="Folder to Watch:")
         self.label_folder.pack()
@@ -66,7 +67,7 @@ class GUI:
 
     def trigger_start_watching(self, folder_to_watch, output_path):
         self.stop_event.clear()
-        app = Application(self)
+        app = Application()
         app.start_watching(folder_to_watch, output_path, self.stop_event)
 
     def stop_process(self):
@@ -76,5 +77,6 @@ class GUI:
         self.start_button.config(text="Start", command=self.start_process)
 
     def log_message(self, message):
+        print(message)
         self.log_text.insert(END, message + "\n")
         self.log_text.see(END)

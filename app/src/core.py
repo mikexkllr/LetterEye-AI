@@ -10,6 +10,7 @@ from langchain.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
 import csv
 from fuzzywuzzy import process, fuzz
+from pubsub import pub
 
 # Define a Pydantic model for structured data extraction
 class LetterDetails(BaseModel):
@@ -82,7 +83,7 @@ class PDFProcessor:
 
     def save_pdf(self, images, save_path):
         images[0].save(save_path, save_all=True, append_images=images[1:])
-        print(f"PDF saved to: {save_path}")
+        pub.sendMessage('log_event', message=f"PDF saved to: {save_path}")
 
     def analyze_text(self, ocr_text):
         try:
@@ -97,7 +98,7 @@ class PDFProcessor:
             response = chain.invoke({"ocr_text": ocr_text, "language": self.language, "responsible_persons_names": str(os.listdir(self.csv_dir))})
             return response
         except Exception as e:
-            print(f"Failed to analyze text: {e}")
+            pub.sendMessage('log_event', message=f"Failed to analyze text: {e}")
             raise
 
 class CoreApplication:
@@ -118,7 +119,7 @@ class CoreApplication:
         try:
             images = pdf_processor.convert_pdf_to_images(pdf_path)
         except Exception as e:
-            print(f"Failed to convert PDF to images: {e}")
+            pub.sendMessage('log_event', message=f"Failed to convert PDF to images: {e}")
             if images:
                 failed_path = os.path.join(failed_folder, original_pdf_name)
                 pdf_processor.save_pdf(images, failed_path)
@@ -126,19 +127,19 @@ class CoreApplication:
 
         try:
             ocr_text = pdf_processor.perform_ocr(images)
-            print("OCR Text:", ocr_text)
+            pub.sendMessage('log_event', message="OCR Text: " + ocr_text)
         except Exception as e:
-            print(f"OCR failed: {e}")
+            pub.sendMessage('log_event', message=f"OCR failed: {e}")
             failed_path = os.path.join(failed_folder, original_pdf_name)
             pdf_processor.save_pdf(images, failed_path)
             return
 
         try:
             letter_details = pdf_processor.analyze_text(ocr_text)
-            print("Extracted Details:")
-            print(letter_details)
+            pub.sendMessage('log_event', message="Extracted Details:")
+            pub.sendMessage('log_event', message=letter_details)
         except Exception as e:
-            print(f"Failed to extract letter details: {e}")
+            pub.sendMessage('log_event', message=f"Failed to extract letter details: {e}")
             failed_path = os.path.join(failed_folder, original_pdf_name)
             pdf_processor.save_pdf(images, failed_path)
             return
@@ -147,9 +148,9 @@ class CoreApplication:
         worker_manager = WorkerManager(self.csv_dir)
         worker_name, csv_filename, matched_receiver = worker_manager.find_worker_by_receiver(receiver_name)
 
-        print(f"Receiver: {receiver_name}")
-        print(f"Matched Receiver: {matched_receiver}")
-        print(f"Worker Name: {worker_name}")
+        pub.sendMessage('log_event', message=f"Receiver: {receiver_name}")
+        pub.sendMessage('log_event', message=f"Matched Receiver: {matched_receiver}")
+        pub.sendMessage('log_event', message=f"Worker Name: {worker_name}")
 
         if not worker_name:
             if letter_details.responsible_person:
@@ -157,7 +158,7 @@ class CoreApplication:
                 matched_receiver = letter_details.receiver
                 csv_filename = f"{worker_name}.csv"
             else:
-                print(f"Receiver {receiver_name} not found in any CSV files.")
+                pub.sendMessage('log_event', message=f"Receiver {receiver_name} not found in any CSV files.")
                 failed_path = os.path.join(failed_folder, original_pdf_name)
                 pdf_processor.save_pdf(images, failed_path)
                 return
@@ -178,7 +179,7 @@ class CoreApplication:
             # Delete the original PDF if saved successfully
             os.remove(pdf_path)
         except Exception as e:
-            print(f"Failed to save PDF to structured folder: {e}")
+            pub.sendMessage('log_event', message=f"Failed to save PDF to structured folder: {e}")
             failed_path = os.path.join(failed_folder, original_pdf_name)
             pdf_processor.save_pdf(images, failed_path)
             return
