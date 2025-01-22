@@ -1,105 +1,11 @@
 import os
 import shutil
-import sys
-from dotenv import load_dotenv
-import pytesseract
-from pdf2image import convert_from_path
-from langchain import LLMChain, PromptTemplate
-from langchain_openai import ChatOpenAI
-from langchain.output_parsers import PydanticOutputParser
-from pydantic import BaseModel, Field
-import csv
-from fuzzywuzzy import process, fuzz
 from pubsub import pub
 
-# Define a Pydantic model for structured data extraction
-class LetterDetails(BaseModel):
-    sender: str = Field(..., description="The sender of the letter")
-    receiver: str = Field(..., description="The receiver of the letter. NAME ONLY (no other details)")
-    organisation: str = Field(..., description="The organisation/ company/name of the sender - empty if not present or private person")
-    date_of_writing: str = Field(..., description="The date the letter was written")
-    type_of_letter: str = Field(..., description="The type of the letter. Maximal 5 words which describes a summary what the letter is about")
-    responsible_person: str = Field(..., description="The person responsible for the letter. Name only (no other details)")
+from app.src.folder_application import FolderManager
+from app.src.pdf_processor import PDFProcessor
+from app.src.worker_manager import WorkerManager
 
-class WorkerManager:
-    def __init__(self, csv_dir):
-        self.csv_dir = csv_dir
-
-    def find_worker_by_receiver(self, receiver_name):
-        best_match = None
-        highest_score = 0
-
-        for filename in os.listdir(self.csv_dir):
-            if filename.endswith('.csv'):
-                with open(os.path.join(self.csv_dir, filename), newline='') as csvfile:
-                    csv_reader = csv.reader(csvfile)
-                    for row in csv_reader:
-                        if row:
-                            match, score = process.extractOne(receiver_name, row, scorer=fuzz.ratio)
-                            if score > highest_score and score > 70:
-                                best_match = (filename.replace(".csv", ""), filename, match)
-                                highest_score = score
-
-        if best_match:
-            return best_match[0], best_match[1], best_match[2]
-
-        return None, None, None
-
-class FolderManager:
-    def __init__(self, output_dir):
-        self.output_dir = output_dir
-
-    def find_or_create_folder(self, worker_name, receiver_name):
-        main_folder = os.path.join(self.output_dir, worker_name)
-        os.makedirs(main_folder, exist_ok=True)
-
-        subdirectories = os.listdir(main_folder)
-        best_match = process.extractOne(receiver_name, subdirectories, scorer=fuzz.ratio)
-
-        if best_match:
-            existing_folder, score = best_match
-            if score > 70:
-                return os.path.join(main_folder, existing_folder)
-
-        receiver_folder = os.path.join(main_folder, receiver_name)
-        os.makedirs(receiver_folder, exist_ok=True)
-        return receiver_folder
-
-class PDFProcessor:
-    def __init__(self, language, api_key, csv_dir):
-        self.language = language
-        self.llm = ChatOpenAI(api_key=api_key, model="gpt-4o-mini")
-        self.csv_dir = csv_dir
-
-    def convert_pdf_to_images(self, pdf_path):
-        return convert_from_path(pdf_path)
-
-    def perform_ocr(self, images):
-        ocr_text = ""
-        for image in images:
-            ocr_text += pytesseract.image_to_string(image)
-        return ocr_text
-
-    def save_pdf(self, images, save_path):
-        images[0].save(save_path, save_all=True, append_images=images[1:])
-        pub.sendMessage('log_event', message=f"PDF saved to: {save_path}")
-
-    def analyze_text(self, ocr_text):
-        try:
-            prompt_template = (
-                """
-                    From the text provided, extract the names of the sender and recipient, including only the recipient's name. Identify the date of writing and provide a type of letter classified as an ultra-short summary in a maximum of 5 words in {language}. If a responsible person, whose name maybe appears in {responsible_persons_names}, is associated with the recipient, include their name; otherwise, leave that field empty. Text: {ocr_text}
-                """
-            )
-
-            llm_with_structured_output = self.llm.with_structured_output(LetterDetails)
-            prompt = PromptTemplate(template=prompt_template, input_variables=["ocr_text", "language"])
-            chain = prompt | llm_with_structured_output
-            response = chain.invoke({"ocr_text": ocr_text, "language": self.language, "responsible_persons_names": str(os.listdir(self.csv_dir))})
-            return response
-        except Exception as e:
-            pub.sendMessage('log_event', message=f"Failed to analyze text: {e}")
-            raise
 
 class CoreApplication:
     def __init__(self, openai_api_key, language, csv_dir, output_dir):
