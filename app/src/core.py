@@ -19,7 +19,6 @@ class LetterDetails(BaseModel):
     organisation: str = Field(..., description="The organisation/ company/name of the sender - empty if not present or private person")
     date_of_writing: str = Field(..., description="The date the letter was written")
     type_of_letter: str = Field(..., description="The type of the letter. Maximal 5 words which describes a summary what the letter is about")
-    short_summary: str = Field(..., description="A summary of the letter")
     responsible_person: str = Field(..., description="The person responsible for the letter. Name only (no other details)")
 
 class WorkerManager:
@@ -89,9 +88,10 @@ class PDFProcessor:
         try:
             prompt_template = (
                 """
-                    From the text provided, extract the names of the sender and recipient, including only the recipient's name. Identify the date of writing and provide a type of letter classified as an ultra-short summary in a maximum of 5 words. If a responsible person, whose name maybe appears in {responsible_persons_names}, is associated with the recipient, include their name; otherwise, leave that field empty. Provide a summary in {language}. Text: {ocr_text}
+                    From the text provided, extract the names of the sender and recipient, including only the recipient's name. Identify the date of writing and provide a type of letter classified as an ultra-short summary in a maximum of 5 words in {language}. If a responsible person, whose name maybe appears in {responsible_persons_names}, is associated with the recipient, include their name; otherwise, leave that field empty. Text: {ocr_text}
                 """
             )
+
             llm_with_structured_output = self.llm.with_structured_output(LetterDetails)
             prompt = PromptTemplate(template=prompt_template, input_variables=["ocr_text", "language"])
             chain = prompt | llm_with_structured_output
@@ -111,7 +111,7 @@ class CoreApplication:
 
     def run(self, pdf_path):
         pdf_processor = PDFProcessor(self.language, self.openai_api_key, self.csv_dir)
-        failed_folder = os.path.join(self.output_dir, "failed")
+        failed_folder = os.path.join(self.output_dir, "unrecognized")
         os.makedirs(failed_folder, exist_ok=True)
         original_pdf_name = os.path.basename(pdf_path)
         images = None
