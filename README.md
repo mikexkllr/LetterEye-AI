@@ -22,7 +22,7 @@ This project provides a Python Application that extracts text from scanned PDF f
 
 1. **Clone the Repository**:
    ```bash
-   git clone https://github.com/your-repo/pdf-text-extraction.git
+   git clone https://github.com/mikexkllr/LetterEye-AI.git
    cd pdf-text-extraction
    ```
 
