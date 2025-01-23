@@ -1,6 +1,9 @@
-# PDF Text Extraction and Analysis
+# LetterEye AI
 
-This project provides a Python Application that extracts text from scanned PDF files using Optical Character Recognition (OCR) and analyzes the extracted text using the OpenAI API. The desktop app is specifically designed for processing letters and aims to extract key information such as the sender, recipient, date, type of letter, and a short summary. Additionally, it organizes output PDFs into directories based on the worker and recipient names retrieved from CSV files.
+
+## PDF Text Extraction and Analysis
+
+This project provides a Python Application that extracts text from scanned PDF files using Optical Character Recognition (OCR) and analyzes the extracted text using the OpenAI GPT Model. The desktop app is specifically designed for processing letters and aims to extract key information such as the sender, recipient, date, type of letter, and a short summary. Additionally, it organizes output PDFs into directories based on the worker and recipient names retrieved from CSV files.
 
 ## Features
 
