@@ -15,7 +15,7 @@ class FolderManager:
 
         if best_match:
             existing_folder, score = best_match
-            if score > 70:
+            if score > 55:
                 return os.path.join(main_folder, existing_folder)
 
         receiver_folder = os.path.join(main_folder, receiver_name)
