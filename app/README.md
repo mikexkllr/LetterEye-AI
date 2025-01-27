@@ -43,6 +43,10 @@ python src/main.py
 6. Click the "Start" button to begin monitoring the specified folder.
 7. Logs will be displayed in the text field for your reference.
 
+# Package to installer
+
+[PyInstaller Tutorial](https://www.pythonguis.com/tutorials/packaging-tkinter-applications-windows-pyinstaller/)
+
 ## Contributing
 
 Feel free to submit issues or pull requests if you have suggestions or improvements for the project.
