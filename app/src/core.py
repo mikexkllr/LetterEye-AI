@@ -1,7 +1,7 @@
 import os
 import shutil
 from pubsub import pub
-
+from config import Config
 from app.src.folder_application import FolderManager
 from app.src.pdf_processor import PDFProcessor
 from app.src.worker_manager import WorkerManager
@@ -35,7 +35,7 @@ class CoreApplication:
 
     def convert_pdf_to_images(self, pdf_path):
         pdf_processor = PDFProcessor(self.language, self.openai_api_key, self.csv_dir)
-        failed_folder = os.path.join(self.output_dir, "unrecognized")
+        failed_folder = os.path.join(self.output_dir, Config.settings.unrecognized_dir)
         os.makedirs(failed_folder, exist_ok=True)
         original_pdf_name = os.path.basename(pdf_path)
 
@@ -84,13 +84,13 @@ class CoreApplication:
                 csv_filename = f"{worker_name}.csv"
             else:
                 pub.sendMessage('log_event', message=f"Receiver {receiver_name} not found in any CSV files.")
-                return "unrecognized", None, letter_details.receiver or "unknown"
+                return Config.settings.unrecognized_dir, None, letter_details.receiver or Config.settings.unknown_dir
 
         return worker_name, csv_filename, matched_receiver
 
     def save_pdf_to_folder(self, pdf_path, letter_details, worker_name, matched_receiver):
         pdf_processor = PDFProcessor(self.language, self.openai_api_key, self.csv_dir)
-        failed_folder = os.path.join(self.output_dir, "failed")
+        failed_folder = os.path.join(self.output_dir, Config.settings.failed_dir)
         os.makedirs(failed_folder, exist_ok=True)
         original_pdf_name = os.path.basename(pdf_path)
 

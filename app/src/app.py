@@ -5,15 +5,17 @@ from dotenv import load_dotenv
 from app.src.watcher import Watcher
 from pubsub import pub
 
+from config import Config
+
 
 class Application:
+
     def __init__(self):
-        load_dotenv()
-        self.openai_api_key = os.getenv('OPENAI_API_KEY')
-        self.language = os.getenv('LANGUAGE')
-        self.csv_dir = os.getenv('CSV_FILES')
-        self.output_dir = os.getenv('OUTPUT_DIR')
-        self.folder_to_watch = os.getenv('PDF_FOLDER_PATH')
+        self.openai_api_key = Config.settings.openai_api_key
+        self.language = Config.settings.language
+        self.csv_dir = Config.settings.csv_files
+        self.output_dir = Config.settings.output_dir
+        self.folder_to_watch = Config.settings.pdf_folder_path
 
         self.watcher = Watcher(self.openai_api_key, self.language, self.csv_dir)
 
