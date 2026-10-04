@@ -89,7 +89,10 @@ Python is installed automatically by the start script (via [uv](https://docs.ast
 
 ### macOS
 
-Same, with **`LetterEyeAI-stable-osx-Setup.pkg`** (right-click → *Open* the first time, the app is not notarized).
+Same, with **`LetterEyeAI-stable-osx-Setup.pkg`** (Apple Silicon). The app is not notarized by Apple (that
+needs a paid developer account), so macOS blocks the first start: open *System Settings → Privacy & Security*
+and click *Open Anyway* (once for the installer, once for the app). Updates installed by the app itself are
+not blocked.
 
 ### Automatic updates: stable and dev
 

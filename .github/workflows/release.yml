@@ -230,3 +230,75 @@ jobs:
             echo "Deleting old dev release $tag"
             gh release delete "$tag" --repo "${{ github.repository }}" --cleanup-tag --yes
           done
+
+  # End-to-end proof that installed apps update themselves: install the previous release of this channel on a
+  # clean Windows machine, let its updater find this release on GitHub, download and apply it.
+  verify-update:
+    if: github.event_name != 'pull_request'
+    needs: [meta, publish]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CHANNEL: ${{ needs.meta.outputs.channel }}
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install the previous ${{ needs.meta.outputs.channel }} release
+        id: previous
+        run: |
+          if [ "$CHANNEL" = "dev" ]; then filter='select(.isPrerelease)'; else filter='select(.isPrerelease | not)'; fi
+          previous=$(gh release list --repo "${{ github.repository }}" --limit 50 --json tagName,isPrerelease,createdAt \
+            --jq "[.[] | $filter] | sort_by(.createdAt) | reverse | .[1].tagName // empty")
+          if [ -z "$previous" ]; then
+            echo "No earlier $CHANNEL release to update from – skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Installing $previous"
+          gh release download "$previous" --repo "${{ github.repository }}" --pattern "LetterEyeAI-$CHANNEL-win-Setup.exe" --dir setup
+          ./setup/LetterEyeAI-$CHANNEL-win-Setup.exe --silent
+          sleep 10
+          taskkill //F //IM LetterEye.exe //T 2>/dev/null || true
+          cat "$LOCALAPPDATA/LetterEyeAI/current/sq.version"
+      - name: Update the installed app to this release
+        if: steps.previous.outputs.skip != 'true'
+        run: |
+          pip install "velopack==$VPK_VERSION"
+          python - <<'PY'
+          import os, sys
+          from pathlib import Path
+          import velopack
+          root = Path(os.environ["LOCALAPPDATA"]) / "LetterEyeAI"
+          locator = velopack.VelopackLocatorConfig(
+              RootAppDir=str(root), UpdateExePath=str(root / "Update.exe"), PackagesDir=str(root / "packages"),
+              ManifestPath=str(root / "current" / "sq.version"), CurrentBinaryDir=str(root / "current"), IsPortable=False)
+          channel = os.environ["CHANNEL"]
+          manager = velopack.UpdateManager(
+              velopack.GithubSource("https://github.com/${{ github.repository }}", os.environ["GH_TOKEN"], channel == "dev"),
+              velopack.UpdateOptions(False, 10, f"{channel}-win"), locator)
+          print("installed:", manager.get_current_version())
+          info = manager.check_for_updates()
+          if not info:
+              sys.exit("The installed app found no update – auto-update is broken")
+          print("found:", info.TargetFullRelease.Version, info.TargetFullRelease.FileName)
+          if info.TargetFullRelease.Version != os.environ["VERSION"]:
+              sys.exit(f"Expected {os.environ['VERSION']}")
+          manager.download_updates(info)
+          manager.wait_exit_then_apply_updates(info, True, False, None)
+          print("download complete, applying after exit")
+          PY
+          for i in $(seq 1 60); do
+            if grep -q "<version>$VERSION</version>" "$LOCALAPPDATA/LetterEyeAI/current/sq.version"; then
+              echo "The installed app updated itself to $VERSION"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "The update was not applied:"; cat "$LOCALAPPDATA/LetterEyeAI/current/sq.version"
+          ls -la "$LOCALAPPDATA/LetterEyeAI"; cat "$LOCALAPPDATA/LetterEyeAI/"*.log 2>/dev/null | tail -50 || true
+          exit 1
