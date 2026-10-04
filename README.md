@@ -102,7 +102,9 @@ not blocked.
 | **dev** | every push to `dev` | `LetterEyeAI-dev-…-Setup` in the newest pre-release | trying changes right away on the real PC |
 
 The [release pipeline](.github/workflows/release.yml) tests on Windows, macOS and Linux, builds both
-installers, starts the built app as a smoke test and publishes a GitHub release. The installed app checks
+installers, starts the built app as a smoke test and publishes a GitHub release. Then it proves the update
+path on a clean Windows machine: it installs the *previous* release of the channel, lets that installation
+find the new release on GitHub, download and apply it, and checks the installed version. The installed app checks
 GitHub (dev: every 5 minutes, stable: hourly), downloads the update in the background and installs it when
 no letter is being processed – after a 60-second banner with *Restart now* / *Later*. Switch the channel any
 time in **Settings → General → Updates**. Push to `dev` from your phone, and a few minutes later the
