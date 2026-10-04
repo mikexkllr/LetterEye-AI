@@ -2,7 +2,8 @@
 
     uv run --extra build python scripts/build.py
 
-Output: dist/LetterEye/ (a folder with LetterEye.exe on Windows). Zip that folder to share it.
+Output: dist/LetterEye/ (with LetterEye.exe on Windows) or dist/LetterEye.app (macOS). The release pipeline
+(.github/workflows/release.yml) turns this into an installer with automatic updates (Velopack).
 Ollama is not bundled – users install it once from https://ollama.com/download (the app's setup
 assistant walks them through it). Models are downloaded by the app into the user's data folder.
 """
@@ -20,7 +21,7 @@ ASSETS = ROOT / "lettereye" / "assets"
 
 
 def main() -> None:
-    icon = ASSETS / ("icon.ico" if sys.platform == "win32" else "icon.png")
+    icon = ASSETS / ("icon.ico" if sys.platform == "win32" else "icon.icns" if sys.platform == "darwin" else "icon.png")
     args = [
         str(ROOT / "lettereye" / "__main__.py"),
         "--name", "LetterEye",
@@ -37,6 +38,7 @@ def main() -> None:
         "--collect-all", "pypdfium2_raw",
         "--collect-all", "onnxruntime",
         "--collect-all", "webview",
+        "--collect-all", "velopack",
         "--collect-submodules", "langchain_ollama",
         "--collect-submodules", "langchain_core",
         "--copy-metadata", "nicegui",

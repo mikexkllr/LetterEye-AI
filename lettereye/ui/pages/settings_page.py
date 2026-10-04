@@ -11,6 +11,7 @@ from ...pipeline.filing import FILENAME_TOKENS, FOLDER_TOKENS, FilingValues, bui
 from ...settings import LANGUAGES, DocumentType, Settings, default_document_types
 from ..context import ctx
 from ..models_panel import ModelsPanel
+from ..updates import updates_card
 from ..widgets import card, folder_field, open_path, page_header
 
 
@@ -233,21 +234,24 @@ def page() -> None:
                     ui.button("Reset to defaults", icon="restart_alt", on_click=_reset_types).props("flat")
 
             # ------------------------------------------------------------------ general
-            with ui.tab_panel(t_general).classes("p-0"), card("p-6 gap-4"):
-                with ui.row().classes("gap-4 items-start"):
-                    ui.select(LANGUAGES, value=draft["language"], label="Language of your letters",
-                              on_change=lambda e: set_("language", e.value)).props("outlined dense").classes("w-64")
-                    ui.select({"auto": "Follow system", "light": "Light", "dark": "Dark"}, value=draft["theme"],
-                              label="Appearance", on_change=lambda e: set_("theme", e.value)).props("outlined dense").classes("w-64")
-                ui.switch("Start watching automatically when LetterEye opens", value=draft["autostart"],
-                          on_change=lambda e: set_("autostart", e.value))
-                ui.separator()
-                with ui.row().classes("gap-2"):
-                    ui.button("Run the setup assistant", icon="auto_fix_high", on_click=lambda: ui.navigate.to("/setup")) \
-                        .props("outline color=primary")
-                    ui.button("Open data folder", icon="folder_open", on_click=lambda: open_path(paths.data_dir())).props("flat")
-                    ui.button("Open logs", icon="receipt_long", on_click=lambda: open_path(paths.log_dir())).props("flat")
-                ui.label(f"LetterEye AI {__version__} · data: {paths.data_dir()}").classes("le-muted text-xs")
+            with ui.tab_panel(t_general).classes("p-0"), ui.column().classes("w-full gap-5"):
+                with card("p-6 gap-4"):
+                    with ui.row().classes("gap-4 items-start"):
+                        ui.select(LANGUAGES, value=draft["language"], label="Language of your letters",
+                                  on_change=lambda e: set_("language", e.value)).props("outlined dense").classes("w-64")
+                        ui.select({"auto": "Follow system", "light": "Light", "dark": "Dark"}, value=draft["theme"],
+                                  label="Appearance", on_change=lambda e: set_("theme", e.value)).props("outlined dense").classes("w-64")
+                    ui.switch("Start watching automatically when LetterEye opens", value=draft["autostart"],
+                              on_change=lambda e: set_("autostart", e.value))
+                    ui.separator()
+                    with ui.row().classes("gap-2"):
+                        ui.button("Run the setup assistant", icon="auto_fix_high", on_click=lambda: ui.navigate.to("/setup")) \
+                            .props("outline color=primary")
+                        ui.button("Open data folder", icon="folder_open", on_click=lambda: open_path(paths.data_dir())).props("flat")
+                        ui.button("Open logs", icon="receipt_long", on_click=lambda: open_path(paths.log_dir())).props("flat")
+                    ui.label(f"LetterEye AI {__version__} · data: {paths.data_dir()}").classes("le-muted text-xs")
+                with card("p-6 gap-4"):
+                    updates_card(draft)
 
     # ---------------------------------------------------------------------- save bar
     def discard() -> None:

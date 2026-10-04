@@ -1,4 +1,6 @@
 """LetterEye AI: local, GPU-accelerated sorting of scanned letters."""
 
-__version__ = "2.0.0"
+from .buildinfo import VERSION
+
+__version__ = VERSION
 APP_NAME = "LetterEye AI"

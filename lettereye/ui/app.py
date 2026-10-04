@@ -8,6 +8,7 @@ from .. import APP_NAME, paths
 from . import theme
 from .context import ctx
 from .pages import approvals, dashboard, documents, insights, settings_page, setup, workers
+from .updates import update_banner, version_line
 
 NAV = [
     ("/", "Dashboard", "space_dashboard"),
@@ -70,6 +71,7 @@ def root() -> None:
                     status_dot = ui.element("span").classes("le-status-dot le-dot-off")
                     status_label = ui.label("Stopped").classes("text-sm text-white font-medium")
                 status_detail = ui.label("").classes("text-xs text-slate-400 break-all")
+            ui.label(version_line()).classes("text-[10px] text-slate-500 px-2 pt-1")
 
     def highlight(path: str) -> None:
         for item_path, element in nav_items.items():
@@ -107,6 +109,7 @@ def root() -> None:
 
     ui.timer(1.0, refresh_shell)
 
+    update_banner()
     ui.sub_pages(ROUTES).classes("w-full")
 
 

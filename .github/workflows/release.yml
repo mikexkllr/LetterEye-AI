@@ -1,0 +1,232 @@
+# Build, test and publish LetterEye.
+#
+#   push to main -> stable release  (installed apps on the "stable" channel update to it)
+#   push to dev  -> dev pre-release (installed apps on the "dev" channel update to it)
+#
+# Each release contains a Windows installer (LetterEyeAI-<channel>-win-Setup.exe), a macOS installer
+# (LetterEyeAI-<channel>-osx-Setup.pkg) and the Velopack update packages the apps download.
+name: Build & release
+
+on:
+  push:
+    branches: [main, dev]
+    paths-ignore: ["**/*.md", "docs/**"]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+env:
+  PACK_ID: LetterEyeAI
+  VPK_VERSION: "1.2.161"
+  PYTHON_VERSION: "3.12"
+  UV_PYTHON_PREFERENCE: only-system
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      channel: ${{ steps.meta.outputs.channel }}
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: meta
+        name: Version, channel and release notes
+        run: |
+          base=$(python3 -c "import tomllib; v = tomllib.load(open('pyproject.toml', 'rb'))['project']['version'].split('.'); print(v[0] + '.' + v[1])")
+          version="$base.${{ github.run_number }}"
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            channel=stable; tag="v$version"; prerelease=false
+            previous=$(git tag --list 'v*' --sort=-v:refname | grep -v -- '-dev' | head -1 || true)
+          else
+            channel=dev; tag="v$version-dev"; prerelease=true
+            previous=$(git tag --list 'v*-dev' --sort=-v:refname | head -1 || true)
+          fi
+          {
+            echo "## What's new"
+            echo
+            if [ -n "$previous" ]; then
+              git log "$previous..HEAD" --no-merges --pretty=format:'- %s' | head -40
+            else
+              git log -20 --no-merges --pretty=format:'- %s'
+            fi
+            echo
+          } > notes.md
+          cat notes.md
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v6
+      - name: Lint
+        if: runner.os == 'Linux'
+        run: uv run --extra dev ruff check .
+      - name: Tests
+        run: uv run --extra dev pytest -q
+
+  build:
+    if: github.event_name != 'pull_request'
+    needs: [meta, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+          - os: macos-latest
+            target: osx
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      FEED: ${{ needs.meta.outputs.channel }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          name: notes
+
+      - name: Write build info
+        run: uv run python scripts/write_buildinfo.py --version "$VERSION" --channel "${{ needs.meta.outputs.channel }}" --commit "${{ github.sha }}"
+
+      - name: Build app (PyInstaller)
+        run: uv run --extra build python scripts/build.py
+
+      - name: Smoke test – the built app starts and serves its UI
+        run: |
+          if [ "${{ matrix.target }}" = "win" ]; then app="dist/LetterEye/LetterEye.exe"; else app="dist/LetterEye.app/Contents/MacOS/LetterEye"; fi
+          "$app" --no-browser --port 8790 --no-autostart --data-dir "$RUNNER_TEMP/smoke-data" &
+          pid=$!
+          for i in $(seq 1 90); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8790/; then echo "UI is up after ${i}s"; ok=1; break; fi
+            sleep 1
+          done
+          kill $pid 2>/dev/null || true
+          if [ "${{ matrix.target }}" = "win" ]; then taskkill //F //IM LetterEye.exe //T 2>/dev/null || true; fi
+          if [ -z "$ok" ]; then
+            echo "The app did not start. Log:"; cat "$RUNNER_TEMP"/smoke-data/logs/*.log 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Install vpk
+        run: dotnet tool install -g vpk --version "$VPK_VERSION"
+
+      - name: Download previous release (for small delta updates)
+        continue-on-error: true
+        run: |
+          pre=""; [ "${{ needs.meta.outputs.prerelease }}" = "true" ] && pre="--pre"
+          vpk download github --repoUrl "https://github.com/${{ github.repository }}" --channel "$FEED" \
+            --token "${{ secrets.GITHUB_TOKEN }}" $pre -o releases
+
+      - name: Pack installer and update package (Velopack)
+        run: |
+          if [ "${{ matrix.target }}" = "win" ]; then
+            vpk pack --packId "$PACK_ID" --packVersion "$VERSION" --packDir dist/LetterEye --mainExe LetterEye.exe \
+              --packTitle "LetterEye AI" --packAuthors "LetterEye AI" --icon lettereye/assets/icon.ico \
+              --channel "$FEED" --releaseNotes notes.md -o releases
+          else
+            vpk pack --packId "$PACK_ID" --packVersion "$VERSION" --packDir dist/LetterEye.app --mainExe LetterEye \
+              --packTitle "LetterEye AI" --packAuthors "LetterEye AI" --icon lettereye/assets/icon.icns \
+              --channel "$FEED" --releaseNotes notes.md -o releases
+          fi
+          ls -la releases
+
+      - name: Collect this build's files
+        run: |
+          mkdir -p upload
+          python - <<'EOF'
+          import json, os, shutil
+          from pathlib import Path
+          feed = os.environ["FEED"]
+          releases = Path("releases")
+          names = [a["RelativeFileName"] for a in json.loads((releases / f"assets.{feed}.json").read_text(encoding="utf-8-sig"))]
+          names += [f"releases.{feed}.json", f"RELEASES-{feed}"]
+          for name in names:
+              if (releases / name).exists():
+                  shutil.copy2(releases / name, Path("upload") / name)
+                  print("upload:", name)
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: upload/
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.meta.outputs.tag }}
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create GitHub release
+        run: |
+          if [ "${{ needs.meta.outputs.prerelease }}" = "true" ]; then
+            flags="--prerelease"; title="LetterEye AI $VERSION (dev)"
+          else
+            flags="--latest"; title="LetterEye AI $VERSION"
+          fi
+          {
+            cat artifacts/notes/notes.md
+            echo
+            echo "## Install"
+            echo
+            echo "- **Windows:** download \`LetterEyeAI-${{ needs.meta.outputs.channel }}-win-Setup.exe\` and run it (no admin rights needed). If SmartScreen warns, choose *More info → Run anyway*."
+            echo "- **macOS:** download \`LetterEyeAI-${{ needs.meta.outputs.channel }}-osx-Setup.pkg\`, then right-click → *Open* the first time."
+            echo
+            echo "Installed apps update themselves from the **${{ needs.meta.outputs.channel }}** channel. Built from ${{ github.sha }}."
+          } > body.md
+          gh release create "$TAG" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+            --title "$title" --notes-file body.md $flags
+          gh release upload "$TAG" --repo "${{ github.repository }}" --clobber artifacts/release-*/*
+
+      - name: Keep only the newest 5 dev releases
+        if: needs.meta.outputs.prerelease == 'true'
+        run: |
+          gh release list --repo "${{ github.repository }}" --limit 100 --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease)] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+          while read -r tag; do
+            echo "Deleting old dev release $tag"
+            gh release delete "$tag" --repo "${{ github.repository }}" --cleanup-tag --yes
+          done

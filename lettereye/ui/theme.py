@@ -69,6 +69,8 @@ body { background: var(--le-bg); color: var(--le-text); font-family: 'Inter', 'S
 .le-token { cursor: pointer; }
 .le-empty { padding: 48px 16px; text-align: center; }
 .le-page-wide { max-width: 1680px; }
+.le-update-banner { position: sticky; top: 0; z-index: 2000; display: flex; align-items: center; gap: 12px; padding: 10px 24px;
+  background: var(--le-gradient); color: white; box-shadow: 0 8px 24px -12px rgba(15,23,42,.4); }
 .le-approvals { height: calc(100vh - 230px); min-height: 560px; }
 .le-queue { width: 310px; flex-shrink: 0; overflow-y: auto; flex-wrap: nowrap; }
 .le-queue-item { border-radius: 14px; padding: 8px 10px; cursor: pointer; border: 1px solid transparent; transition: background .15s, border-color .15s; }

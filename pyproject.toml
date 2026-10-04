@@ -1,6 +1,6 @@
 [project]
 name = "lettereye"
-version = "2.0.0"
+version = "2.1.0"
 description = "Local, GPU-accelerated letter sorting: OCR + a local decision model route scanned letters to the right worker."
 readme = "README.md"
 license = { text = "MIT" }
@@ -26,6 +26,8 @@ dependencies = [
     "platformdirs>=4.0",
     "pydantic>=2.8",
     "httpx>=0.27",
+    # Installer + automatic updates from GitHub releases
+    "velopack>=1.2.161",
 ]
 
 [project.optional-dependencies]

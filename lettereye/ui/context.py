@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from ..db import Database
 from ..events import ActivityFeed
 from ..services.engine import Engine
+from ..services.updater import Updater
 from ..settings import SettingsStore
 
 
@@ -16,6 +17,7 @@ class AppContext:
     store: SettingsStore
     feed: ActivityFeed
     engine: Engine
+    updater: Updater | None = None
     native: bool = False
 
 

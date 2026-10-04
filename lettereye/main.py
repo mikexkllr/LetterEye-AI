@@ -82,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", nargs="?", choices=["run", "analyze"], default="run")
     parser.add_argument("file", nargs="?", help="file for 'analyze'")
     parser.add_argument("--browser", action="store_true", help="open in the web browser instead of a window")
+    parser.add_argument("--no-browser", action="store_true", help="do not open any window or browser (servers, CI)")
     parser.add_argument("--host", default="127.0.0.1", help="interface to listen on (default: only this computer)")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--data-dir", help="store settings, database and models here instead of the app-data folder")
@@ -110,15 +111,23 @@ def main(argv: list[str] | None = None) -> int:
     from .db import Database
     from .events import ActivityFeed
     from .services.engine import Engine
+    from .services.updater import Updater
     from .settings import SettingsStore
     from .ui import context
     from .ui.app import configure_static_files, root
 
-    native = not args.browser and _native_available()
+    native = not args.browser and not args.no_browser and _native_available()
     db, store, feed = Database(), SettingsStore(), ActivityFeed()
     engine = Engine(db, store, feed)
-    context.init(context.AppContext(db=db, store=store, feed=feed, engine=engine, native=native))
+    updater = Updater(store, feed, is_idle=lambda: engine.current is None and engine.queue_size == 0,
+                      shutdown=app.shutdown)
+    context.init(context.AppContext(db=db, store=store, feed=feed, engine=engine, updater=updater, native=native))
     configure_static_files()
+    previous = store.get().last_version
+    if previous != __version__:
+        if previous:
+            feed.add(f"Updated from {previous} to {__version__}", "success")
+        store.update(last_version=__version__)
 
     def autostart() -> None:
         settings = store.get()
@@ -128,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
                 feed.add(f"Could not start watching: {problems[0]}", "warning")
 
     app.on_startup(lambda: threading.Thread(target=autostart, name="autostart", daemon=True).start())
+    app.on_startup(updater.start)
+    app.on_shutdown(updater.stop)
     app.on_shutdown(engine.stop)
 
     ui.run(
@@ -138,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         native=native,
         window_size=(1380, 900) if native else None,
         reload=False,
-        show=not native,
+        show=not native and not args.no_browser,
         favicon=paths.assets_dir() / "icon.png",
         dark=None,
         show_welcome_message=False,

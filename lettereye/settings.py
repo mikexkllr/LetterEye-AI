@@ -111,6 +111,7 @@ class Settings(BaseModel):
     update_channel: Literal["", "stable", "dev"] = ""
     auto_update: bool = True
     update_check_minutes: int = 0  # 0 = automatic (dev: every 5 minutes, stable: hourly)
+    last_version: str = ""  # to announce "updated to …" after an automatic update
 
     @property
     def effective_extraction_model(self) -> str:

@@ -13,8 +13,13 @@
 
 LetterEye watches the folder your scanner saves to. Every new letter is read, a **local decision model**
 works out who it is for, and the PDF is filed into `Worker / Recipient / 2026-03-14_Sender_Type.pdf`.
-Letters it is not sure about land in a **review queue** where you file them with one click – and it
-learns the spelling for next time.
+
+- **Human in the loop:** choose *Approve each letter* (nothing is filed until someone clicks Accept) or
+  *Automatic* (confident letters are filed, unsure ones wait). Corrections take one click and are learned.
+- **Measurable:** every decision is logged – accuracy, calibration, a threshold simulator and an export of
+  labelled training data to fine-tune the model.
+- **Updates itself:** install once from GitHub Releases; every push to `main` (stable) or `dev` (testing)
+  reaches the installed app automatically.
 
 Everything – workers, recipients, models, folders, naming – is managed in a desktop UI. No more
 hand-written CSV files.
@@ -51,7 +56,8 @@ hand-written CSV files.
    the page and the decisions are repeated. Most letters never need it.
 4. **Name.** One small generative pass (LangChain structured output) reads sender, date and subject for
    the file name.
-5. **File** – or **review** if the confidence is below your threshold (default 80 %).
+5. **Approve or file.** In approval mode the proposal waits for a person; in automatic mode letters above
+   your threshold (default 80 %) are filed and the rest wait for a person.
 
 All models run through **[Ollama](https://ollama.com)** with **LangChain** (`langchain-ollama`).
 
@@ -71,27 +77,45 @@ with a yes/no question (92 %) and typed as an invoice (97 %):
 
 Python is installed automatically by the start script (via [uv](https://docs.astral.sh/uv/)).
 
-## Quick start
+## Install
 
-### Windows
+### Windows (recommended: the installer)
 
 1. Install **Ollama** from [ollama.com/download](https://ollama.com/download) (it then runs in the tray).
+2. Open the [latest release](https://github.com/mikexkllr/LetterEye-AI/releases/latest) and download
+   **`LetterEyeAI-stable-win-Setup.exe`**. Run it – no admin rights needed. (SmartScreen may warn because the
+   app is not code-signed: *More info → Run anyway*.)
+3. LetterEye starts and keeps itself up to date.
+
+### macOS
+
+Same, with **`LetterEyeAI-stable-osx-Setup.pkg`** (right-click → *Open* the first time, the app is not notarized).
+
+### Automatic updates: stable and dev
+
+| Channel | Built from | Installer | Use it for |
+|---|---|---|---|
+| **stable** | every push to `main` | `LetterEyeAI-stable-…-Setup` in the latest release | everyday use |
+| **dev** | every push to `dev` | `LetterEyeAI-dev-…-Setup` in the newest pre-release | trying changes right away on the real PC |
+
+The [release pipeline](.github/workflows/release.yml) tests on Windows, macOS and Linux, builds both
+installers, starts the built app as a smoke test and publishes a GitHub release. The installed app checks
+GitHub (dev: every 5 minutes, stable: hourly), downloads the update in the background and installs it when
+no letter is being processed – after a 60-second banner with *Restart now* / *Later*. Switch the channel any
+time in **Settings → General → Updates**. Push to `dev` from your phone, and a few minutes later the
+reception PC runs the new version.
+
+### From source (developers)
+
+1. Install **Ollama**.
 2. Download this repository (green *Code* button → *Download ZIP*) and unzip it.
-3. Double-click **`start-windows.bat`**.
+3. Double-click **`start-windows.bat`** (macOS/Linux: `./start.sh`).
 
 The first start installs everything (a few minutes). Then the **setup assistant** opens and walks you through:
 choosing and downloading the models (with a recommendation for your GPU), picking the inbox and output
 folders, and adding your workers and their recipients. Done – start watching.
 
 ![Setup assistant](docs/screenshots/setup.png)
-
-### macOS / Linux
-
-```bash
-git clone https://github.com/mikexkllr/LetterEye-AI.git
-cd LetterEye-AI
-./start.sh
-```
 
 On Linux the app opens in your browser. For a native window run `LETTEREYE_QT=1 ./start.sh`.
 
@@ -100,12 +124,43 @@ On Linux the app opens in your browser. For a native window run `LETTEREYE_QT=1 
 | Page | What you do there |
 |---|---|
 | **Dashboard** | Start/stop watching, see what is happening live, check GPU and model status, **test any letter** without moving it |
-| **Review** | Letters the AI was unsure about: see the page, the AI's candidates with probabilities, pick the recipient (or create a new one) and file it. The spelling is remembered as an alias. |
+| **Approvals** | The human-in-the-loop queue: page preview, the AI's proposal (recipient, type, date, sender, subject, target path) – accept with ⏎, correct any field, or set the letter aside. Undo, auto-advance, *Accept all ≥ 95 %*. |
+| **Insights** | Accuracy on the letters you checked, per field, calibration, threshold simulator, common corrections, model comparison, training-data export. |
 | **Documents** | Searchable history. Click a letter to see the page, every AI decision with its probability bars, the recognized text and a timing breakdown. |
 | **Workers** | Add workers, give them recipients (paste a whole list at once), alternative spellings, a folder name, and an optional *responsibility* description the AI uses for letters to unknown recipients. Import/export CSV. |
 | **Settings** | Folders, models, OCR strategy and GPU, confidence threshold, file-name templates with live preview, document types, language, appearance. |
 
-![Review queue](docs/screenshots/review.png)
+## Approve or automatic – human in the loop
+
+Switch the mode on the dashboard or the Approvals page:
+
+* **Approve each letter** – the AI prepares everything, a person accepts (⏎) or corrects it. Nothing is moved
+  into the sorted folders before that. Best to start with: every click is a verified data point.
+* **Automatic** – letters above the confidence threshold are filed directly; the rest wait in Approvals.
+  Filed letters can still be confirmed (👍) or fixed later from *Documents*, which moves the file.
+
+![Approvals](docs/screenshots/approvals.png)
+
+Keyboard: **⏎** accept · **↑/↓** previous/next · **E** change recipient · **U** undo. Corrections of the
+recipient teach LetterEye the spelling (e.g. "G. Kelly" → Grace Kelly).
+
+## Insights and training data
+
+Every human decision is stored with the AI's original proposal, so LetterEye can tell you how good it is:
+
+* **Routing accuracy** and **accuracy per field** on the letters people checked (unchecked auto-filed letters
+  never count as correct).
+* **Calibration** – is "90 % sure" really right 90 % of the time?
+* **Threshold simulator** – what share would be filed automatically at 85 %, and how many of those would be
+  wrong? One click applies it.
+* **Common corrections** and a **model comparison** – the data to decide between more aliases, better worker
+  descriptions, a bigger model (`qwen3.5:9b`) or fine-tuning.
+* **Export training data** – `decisions.jsonl` (typed decisions with the human label – the format decision
+  models such as Jev are trained on), `chat_sft.jsonl` (the exact prompts with the correct answer, ready for
+  LoRA fine-tuning), `extraction.jsonl` and CSVs. A fine-tuned model can be loaded into Ollama and selected in
+  Settings.
+
+![Insights](docs/screenshots/insights.png)
 
 **Test a letter** runs the complete pipeline on any PDF and shows where it would go – nothing is moved:
 
@@ -152,6 +207,7 @@ lettereye --browser            open in the browser instead
 lettereye --port 8765          change the port (default 8765, local only)
 lettereye --data-dir PATH      keep all data in PATH
 lettereye --no-autostart       do not start watching automatically
+lettereye --no-browser         run headless (no window, no browser) – e.g. on a server
 lettereye analyze letter.pdf   run the whole pipeline on one file and print the result as JSON
 ```
 
@@ -163,17 +219,20 @@ file is no longer used; all settings live in the app. The old samples are in `ex
 
 ## Build a standalone app
 
+The release pipeline does this for every push to `main`/`dev`. Locally:
+
 ```bash
 uv run --extra build python scripts/build.py
 ```
 
-Creates `dist/LetterEye/` (with `LetterEye.exe` on Windows). Zip the folder to share it; users still
-install Ollama once.
+Creates `dist/LetterEye/` (`LetterEye.exe` on Windows) or `dist/LetterEye.app`. The installer and update
+packages are made with [Velopack](https://velopack.io) (`vpk pack`, see the workflow). Users still install
+Ollama once.
 
 ## Development
 
 ```bash
-uv run --extra dev pytest          # 61 tests, no GPU or Ollama needed (the AI is faked)
+uv run --extra dev pytest          # 73 tests, no GPU or Ollama needed (the AI is faked)
 uv run --extra dev ruff check .
 ```
 
@@ -184,10 +243,13 @@ lettereye/
   ai/          decision engine (Jev-style typed decisions), fact extraction, Ollama service
   ocr/         PDF/image loading, PP-OCRv6 (GPU), OCR LLM
   pipeline/    the processing pipeline, file naming, date parsing
-  services/    inbox watcher, processing engine
+  services/    inbox watcher, processing engine (incl. approve/correct/reject/undo), updater
   ui/          NiceGUI desktop UI (pages, widgets, theme)
-  db.py        SQLite: workers, recipients, documents
+  db.py        SQLite: workers, recipients, documents, feedback log
+  insights.py  metrics from the feedback log
+  dataset.py   training-data export
   settings.py  settings model + storage
+.github/workflows/release.yml   test → build (Windows, macOS) → smoke test → Velopack → GitHub release
 tests/
 ```
 
@@ -197,6 +259,8 @@ tests/
 * **Model shows "partly on CPU"** – the model does not fit into your GPU memory; pick a smaller one in Settings → AI models.
 * **Fast OCR runs on CPU on Windows** – update the graphics driver (DirectML needs Windows 10 1903+ with a DX12 GPU).
 * **Linux: CUDA not used for fast OCR** – install the CUDA 12 runtime and cuDNN 9, or ignore it: OCR on the CPU is still fast.
+* **Updates do not arrive** – Settings → General → Updates shows the channel, the last check and any error.
+  Only installed builds update; a copy started with `start-windows.bat` updates with `git pull`.
 * Logs: Settings → General → *Open logs*.
 
 ## License
