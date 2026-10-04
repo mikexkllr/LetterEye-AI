@@ -119,7 +119,8 @@ def _review_card(doc: Document, recipients, workers) -> None:
                                             label="Document type").props("outlined dense").classes("w-56")
                     learn = ui.checkbox(f"Remember “{clean_person_name(doc.recipient_name)}” as a spelling", value=True) \
                         .classes("text-sm")
-                    learn.set_visibility(bool(doc.recipient_name))
+                    learn.bind_visibility_from(mode, "value",
+                                               backward=lambda v: v == "existing" and bool(doc.recipient_name))
 
                 async def file_it() -> None:
                     try:

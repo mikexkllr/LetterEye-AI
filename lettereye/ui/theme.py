@@ -67,7 +67,6 @@ body { background: var(--le-bg); color: var(--le-text); font-family: 'Inter', 'S
 .le-kbd { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: 12px; background: var(--le-soft); border-radius: 6px; padding: 1px 6px; }
 .le-token { cursor: pointer; }
 .le-empty { padding: 48px 16px; text-align: center; }
-.q-avatar__content { font-family: inherit; letter-spacing: .02em; }
 .q-field--outlined .q-field__control { border-radius: 12px; }
 .q-btn { border-radius: 10px; text-transform: none; font-weight: 600; letter-spacing: 0; }
 .q-tab { text-transform: none; font-weight: 600; }

@@ -231,10 +231,10 @@ def page(first_run: bool = False) -> None:
                                  bool(c.db.list_workers())),
                             ]
                             for title, value, ok in checks:
-                                with ui.row().classes("items-center gap-3"):
+                                with ui.row().classes("items-center gap-3 no-wrap w-full"):
                                     ui.icon("check_circle" if ok else "pending", color="positive" if ok else "warning")
-                                    ui.label(title).classes("font-medium w-36")
-                                    ui.label(value).classes("le-muted text-sm break-all")
+                                    ui.label(title).classes("font-medium w-36 shrink-0")
+                                    ui.label(value).classes("le-muted text-sm break-all").style("min-width: 0")
                             for problem in problems:
                                 ui.label(f"• {problem}").classes("text-sm text-amber-700")
                     start_now = ui.switch("Start watching the inbox now", value=True)

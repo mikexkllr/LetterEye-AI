@@ -55,6 +55,11 @@ hand-written CSV files.
 
 All models run through **[Ollama](https://ollama.com)** with **LangChain** (`langchain-ollama`).
 
+Every decision is visible in the app – here the letter above was routed to Bob Smith with 99.6 %, double-checked
+with a yes/no question (92 %) and typed as an invoice (97 %):
+
+![AI decisions of one letter](docs/screenshots/decisions.png)
+
 ## What you need
 
 | | |
@@ -78,6 +83,8 @@ The first start installs everything (a few minutes). Then the **setup assistant*
 choosing and downloading the models (with a recommendation for your GPU), picking the inbox and output
 folders, and adding your workers and their recipients. Done – start watching.
 
+![Setup assistant](docs/screenshots/setup.png)
+
 ### macOS / Linux
 
 ```bash
@@ -100,7 +107,15 @@ On Linux the app opens in your browser. For a native window run `LETTEREYE_QT=1 
 
 ![Review queue](docs/screenshots/review.png)
 
+**Test a letter** runs the complete pipeline on any PDF and shows where it would go – nothing is moved:
+
+![Test a letter](docs/screenshots/test-letter.png)
+
 ![Workers](docs/screenshots/workers.png)
+
+Light and dark mode follow your system (or pick one in Settings → General).
+
+![Dark mode](docs/screenshots/dashboard-dark.png)
 
 ## Models
 
@@ -158,7 +173,7 @@ install Ollama once.
 ## Development
 
 ```bash
-uv run --extra dev pytest          # 54 tests, no GPU or Ollama needed (the AI is faked)
+uv run --extra dev pytest          # 61 tests, no GPU or Ollama needed (the AI is faked)
 uv run --extra dev ruff check .
 ```
 

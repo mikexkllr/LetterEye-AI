@@ -31,13 +31,30 @@ def is_candidate(path: Path) -> bool:
     return is_supported(path) and not name.startswith(_TEMP_PREFIXES) and not name.lower().endswith(_TEMP_SUFFIXES)
 
 
+def _windows_exclusive_open_fails(path: Path) -> bool:
+    """Try to open the file with no sharing allowed. Fails while any other process still has it open."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                     wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    generic_read, open_existing, file_attribute_normal = 0x80000000, 3, 0x80
+    handle = kernel32.CreateFileW(str(path), generic_read, 0, None, open_existing, file_attribute_normal, None)
+    if handle is None or handle == wintypes.HANDLE(-1).value:
+        error = ctypes.get_last_error()
+        return error in (32, 33)  # ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+    kernel32.CloseHandle(handle)
+    return False
+
+
 def is_locked(path: Path) -> bool:
     """True while another process (scanner, sync tool, copy) still holds the file."""
     try:
         if sys.platform == "win32":
-            # Renaming a file onto itself fails on Windows while another process has it open without
-            # FILE_SHARE_DELETE, which is how scanners and Explorer copies write files.
-            os.rename(path, path)
+            return _windows_exclusive_open_fails(path)
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
         os.close(fd)
         return False

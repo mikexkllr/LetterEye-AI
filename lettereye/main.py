@@ -26,6 +26,10 @@ def _setup_logging(verbose: bool) -> None:
                                              encoding="utf-8"),
     ]
     if sys.stderr is not None:  # windowed PyInstaller builds have no console
+        try:  # a redirected Windows console may not be UTF-8; never fail on an umlaut or arrow
+            sys.stderr.reconfigure(errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
         handlers.append(logging.StreamHandler())
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, handlers=handlers,
                         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")

@@ -54,10 +54,9 @@ def confidence_bar(p: float | None, width: str = "w-28") -> None:
 
 
 def worker_avatar(worker: Worker | None, size: str = "md") -> None:
-    if worker is None:
-        ui.avatar("?", color="grey-5", text_color="white", size=size)
-        return
-    ui.avatar(worker.initials, text_color="white", size=size).style(f"background: {worker.color}").classes("font-bold")
+    # ui.avatar's first argument is an icon name, so the initials go into a label inside it.
+    with ui.avatar(color=worker.color if worker else "grey-5", text_color="white", size=size):
+        ui.label(worker.initials if worker else "?").classes("font-bold").style("font-size: .8em; letter-spacing: .03em")
 
 
 def relative_time(iso: str) -> str:
@@ -111,7 +110,7 @@ def reveal_path(path: str | Path) -> None:
     """Open the folder containing a file, selecting the file where the OS supports it."""
     p = Path(path)
     if sys.platform == "win32" and p.is_file():
-        subprocess.Popen(["explorer", "/select,", str(p)])
+        subprocess.Popen(f'explorer /select,"{p}"')
     elif sys.platform == "darwin" and p.exists():
         subprocess.Popen(["open", "-R", str(p)])
     else:
