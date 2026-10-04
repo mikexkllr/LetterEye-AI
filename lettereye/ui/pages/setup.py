@@ -237,12 +237,37 @@ def page(first_run: bool = False) -> None:
                                     ui.label(value).classes("le-muted text-sm break-all").style("min-width: 0")
                             for problem in problems:
                                 ui.label(f"• {problem}").classes("text-sm text-amber-700")
+                    ui.label("How should LetterEye work?").classes("text-base font-semibold mt-2")
+                    chosen = {"mode": c.store.get().workflow_mode}
+                    modes = ui.row().classes("w-full gap-3 no-wrap")
+
+                    def render_modes() -> None:
+                        modes.clear()
+                        with modes:
+                            for key, icon, title, text in (
+                                ("approve", "pan_tool", "Ask me first (recommended to start)",
+                                 "The AI prepares every letter, you accept or correct it with one click. Nothing is "
+                                 "filed without you – and every decision makes the AI measurably better."),
+                                ("automatic", "bolt", "File automatically",
+                                 "Letters the AI is confident about are filed right away. Only unsure ones wait "
+                                 "for you. Switch any time on the dashboard."),
+                            ):
+                                selected = chosen["mode"] == key
+                                with ui.column().classes("p-4 rounded-2xl gap-1 cursor-pointer flex-1").style(
+                                        f"border: {'2px solid #6366f1' if selected else '1px solid var(--le-border)'}") \
+                                        .on("click", lambda k=key: (chosen.update(mode=k), render_modes())):
+                                    with ui.row().classes("items-center gap-2"):
+                                        ui.icon(icon, color="primary" if selected else "grey-6")
+                                        ui.label(title).classes("font-semibold")
+                                    ui.label(text).classes("le-muted text-sm")
+
+                    render_modes()
                     start_now = ui.switch("Start watching the inbox now", value=True)
                     ui.label("Tip: use “Test a letter” on the dashboard to see the AI in action on any PDF.") \
                         .classes("le-muted text-sm")
 
                     async def finish() -> None:
-                        persist(setup_completed=True, autostart=True)
+                        persist(setup_completed=True, autostart=True, workflow_mode=chosen["mode"])
                         if start_now.value:
                             problems = await run.io_bound(c.engine.start)
                             if problems:

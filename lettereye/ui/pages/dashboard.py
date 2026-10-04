@@ -11,6 +11,7 @@ from ...gpu import ONNX_DEVICE_LABELS, best_onnx_device, detect_gpus
 from ..context import ctx
 from ..document_detail import show_document
 from ..widgets import card, on_data_change, open_path, page_header, relative_time, status_chip
+from .approvals import mode_toggle
 from .test_letter import open_test_dialog
 
 LEVEL_ICONS = {
@@ -45,7 +46,9 @@ def page() -> None:
     c = ctx()
     with ui.column().classes("le-page"):
         with page_header("Dashboard", "Letters are read, decided and filed by AI running on this computer."):
-            ui.button("Test a letter", icon="science", on_click=open_test_dialog).props("outline color=primary")
+            with ui.row().classes("items-center gap-3 no-wrap shrink-0"):
+                mode_toggle()
+                ui.button("Test a letter", icon="science", on_click=open_test_dialog).props("outline color=primary")
 
         @ui.refreshable
         def hero() -> None:
@@ -80,6 +83,12 @@ def page() -> None:
                             if s.output_folder:
                                 ui.button("Sorted letters", icon="folder_special",
                                           on_click=lambda: open_path(s.output_folder)).props("flat dense color=white no-caps")
+                    waiting = sum(c.db.count_by_status()[k] for k in ("pending", "review"))
+                    if waiting:
+                        ui.button(f"Review {waiting} letter{'s' if waiting != 1 else ''}", icon="fact_check",
+                                  on_click=lambda: ui.navigate.to("/approvals")) \
+                            .props("size=lg unelevated color=white text-color=primary no-caps") \
+                            .classes("px-5 shrink-0").style("border-radius: 14px")
                     ui.button("Stop" if running else "Start", icon="stop" if running else "play_arrow",
                               on_click=toggle_engine) \
                         .props(f"size=lg unelevated {'outline color=white' if running else 'color=white text-color=primary'}") \
@@ -93,8 +102,8 @@ def page() -> None:
             totals = c.db.count_by_status()
             items = [
                 ("Processed today", today["filed"] + today["review"] + today["failed"] + today["ignored"], "mark_email_read", "#6366f1"),
-                ("Filed automatically", today["filed"], "task_alt", "#16a34a"),
-                ("Waiting for review", totals["review"], "rate_review", "#f59e0b"),
+                ("Filed", today["filed"], "task_alt", "#16a34a"),
+                ("Waiting for you", totals["review"] + totals["pending"], "pending_actions", "#f59e0b"),
                 ("Failed today", today["failed"], "error_outline", "#dc2626"),
             ]
             with ui.grid(columns=4).classes("w-full gap-4"):

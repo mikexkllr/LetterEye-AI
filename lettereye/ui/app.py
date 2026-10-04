@@ -7,20 +7,23 @@ from nicegui import app, ui
 from .. import APP_NAME, paths
 from . import theme
 from .context import ctx
-from .pages import dashboard, documents, review, settings_page, setup, workers
+from .pages import approvals, dashboard, documents, insights, settings_page, setup, workers
 
 NAV = [
     ("/", "Dashboard", "space_dashboard"),
-    ("/review", "Review", "fact_check"),
+    ("/approvals", "Approvals", "fact_check"),
     ("/documents", "Documents", "inventory_2"),
+    ("/insights", "Insights", "insights"),
     ("/workers", "Workers", "groups"),
     ("/settings", "Settings", "tune"),
 ]
 
 ROUTES = {
     "/": dashboard.page,
-    "/review": review.page,
+    "/approvals": approvals.page,
+    "/review": approvals.page,
     "/documents": documents.page,
+    "/insights": insights.page,
     "/workers": workers.page,
     "/settings": settings_page.page,
     "/setup": setup.page,
@@ -57,7 +60,7 @@ def root() -> None:
                 with ui.row().classes("le-nav-item items-center w-full no-wrap") as item:
                     ui.icon(icon, size="20px")
                     ui.label(label).classes("text-[14px] font-medium")
-                    if path == "/review":
+                    if path == "/approvals":
                         review_badge = ui.label("").classes("le-nav-badge")
                 item.on("click", lambda p=path: ui.navigate.to(p))
                 nav_items[path] = item
@@ -81,7 +84,8 @@ def root() -> None:
         if c.feed.version == last_version["v"] and c.engine.state not in ("starting", "stopping"):
             return
         last_version["v"] = c.feed.version
-        count = c.db.count_by_status()["review"]
+        counts = c.db.count_by_status()
+        count = counts["review"] + counts["pending"]
         review_badge.text = str(count) if count else ""
         review_badge.set_visibility(bool(count))
         state = c.engine.state

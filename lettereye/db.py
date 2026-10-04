@@ -15,7 +15,9 @@ from . import paths
 
 WORKER_COLORS = ["#6366f1", "#06b6d4", "#d946ef", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#0ea5e9", "#ec4899", "#84cc16"]
 
-DOCUMENT_STATUSES = ("queued", "processing", "filed", "review", "failed", "ignored")
+DOCUMENT_STATUSES = ("queued", "processing", "pending", "filed", "review", "failed", "ignored")
+# pending = the AI has a confident proposal that waits for a human to accept it (approval mode)
+# review  = the AI is unsure and needs a human to decide
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS workers (
@@ -60,14 +62,39 @@ CREATE TABLE IF NOT EXISTS documents (
     error TEXT NOT NULL DEFAULT '',
     duration_ms INTEGER,
     fingerprint TEXT NOT NULL DEFAULT '',
+    proposal TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source_path);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at);
+CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY,
+    doc_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    action TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT '',
+    ai TEXT NOT NULL DEFAULT '{}',
+    final TEXT NOT NULL DEFAULT '{}',
+    changed TEXT NOT NULL DEFAULT '[]',
+    ai_confidence REAL,
+    decision_model TEXT NOT NULL DEFAULT '',
+    ocr_source TEXT NOT NULL DEFAULT '',
+    escalated INTEGER NOT NULL DEFAULT 0,
+    seconds_to_decide REAL,
+    processing_ms INTEGER,
+    undone INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_doc ON feedback(doc_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at);
 """
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
+# Columns added after the first release; added to older databases on start.
+_ADDED_COLUMNS = {"documents": {"proposal": "TEXT NOT NULL DEFAULT '{}'"}}
+
+FEEDBACK_ACTIONS = ("auto_filed", "accepted", "corrected", "confirmed", "rejected")
+# auto_filed = filed by the AI without a human (unverified); confirmed = a human said an auto-filed letter was right
 
 
 def now_iso() -> str:
@@ -138,6 +165,31 @@ class Document:
     updated_at: str
     worker_name: str = ""
     recipient_label: str = ""
+    proposal: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Feedback:
+    id: int
+    doc_id: int | None
+    created_at: str
+    action: str
+    mode: str
+    ai: dict[str, Any]
+    final: dict[str, Any]
+    changed: list[str]
+    ai_confidence: float | None
+    decision_model: str
+    ocr_source: str
+    escalated: bool
+    seconds_to_decide: float | None
+    processing_ms: int | None
+    undone: bool
+
+    @property
+    def verified(self) -> bool:
+        """A human looked at the AI's proposal (accepted, corrected or confirmed it)."""
+        return self.action in ("accepted", "corrected", "confirmed") and not self.undone
 
 
 class Database:
@@ -153,6 +205,11 @@ class Database:
                 self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(_SCHEMA)
+            for table, columns in _ADDED_COLUMNS.items():
+                existing = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+                for column, definition in columns.items():
+                    if column not in existing:
+                        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             self._conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             self._conn.commit()
 
@@ -378,6 +435,7 @@ class Database:
             duration_ms=row["duration_ms"], created_at=row["created_at"], updated_at=row["updated_at"],
             worker_name=row["worker_name"] if "worker_name" in keys and row["worker_name"] else "",
             recipient_label=row["recipient_label"] if "recipient_label" in keys and row["recipient_label"] else "",
+            proposal=json.loads(row["proposal"] or "{}") if "proposal" in keys else {},
         )
 
     _DOC_SELECT = """SELECT d.*, w.name AS worker_name, r.name AS recipient_label FROM documents d
@@ -396,8 +454,9 @@ class Database:
     def update_document(self, doc_id: int, **fields: Any) -> None:
         if not fields:
             return
-        if "trace" in fields and not isinstance(fields["trace"], str):
-            fields["trace"] = json.dumps(fields["trace"], ensure_ascii=False, default=str)
+        for key in ("trace", "proposal"):
+            if key in fields and not isinstance(fields[key], str):
+                fields[key] = json.dumps(fields[key], ensure_ascii=False, default=str)
         fields["updated_at"] = now_iso()
         sets = ", ".join(f"{k} = :{k}" for k in fields)
         self._exec(f"UPDATE documents SET {sets} WHERE id = :id", {**fields, "id": doc_id})
@@ -407,7 +466,7 @@ class Database:
         return self._document(rows[0]) if rows else None
 
     def list_documents(self, status: str | list[str] | None = None, search: str = "", limit: int = 200,
-                       offset: int = 0) -> list[Document]:
+                       offset: int = 0, oldest_first: bool = False) -> list[Document]:
         where, params = [], []
         if status:
             statuses = [status] if isinstance(status, str) else list(status)
@@ -418,7 +477,8 @@ class Database:
             where.append("(d.original_name LIKE ? OR d.sender LIKE ? OR d.recipient_name LIKE ? OR d.subject LIKE ? "
                          "OR w.name LIKE ? OR r.name LIKE ? OR d.doc_type LIKE ?)")
             params += [like] * 7
-        sql = f"{self._DOC_SELECT} {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY d.id DESC LIMIT ? OFFSET ?"
+        order = "ASC" if oldest_first else "DESC"
+        sql = f"{self._DOC_SELECT} {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY d.id {order} LIMIT ? OFFSET ?"
         return [self._document(r) for r in self._query(sql, (*params, limit, offset))]
 
     def is_tracked(self, path: str | Path, fingerprint: str = "") -> bool:
@@ -450,6 +510,49 @@ class Database:
 
     def delete_document(self, doc_id: int) -> None:
         self._exec("DELETE FROM documents WHERE id = ?", (doc_id,))
+
+    # ---------------------------------------------------------------- feedback
+    @staticmethod
+    def _feedback(row: sqlite3.Row) -> Feedback:
+        return Feedback(
+            id=row["id"], doc_id=row["doc_id"], created_at=row["created_at"], action=row["action"], mode=row["mode"],
+            ai=json.loads(row["ai"] or "{}"), final=json.loads(row["final"] or "{}"),
+            changed=json.loads(row["changed"] or "[]"), ai_confidence=row["ai_confidence"],
+            decision_model=row["decision_model"], ocr_source=row["ocr_source"], escalated=bool(row["escalated"]),
+            seconds_to_decide=row["seconds_to_decide"], processing_ms=row["processing_ms"], undone=bool(row["undone"]),
+        )
+
+    def add_feedback(self, doc_id: int | None, action: str, *, mode: str = "", ai: dict | None = None,
+                     final: dict | None = None, changed: list[str] | None = None, ai_confidence: float | None = None,
+                     decision_model: str = "", ocr_source: str = "", escalated: bool = False,
+                     seconds_to_decide: float | None = None, processing_ms: int | None = None) -> Feedback:
+        if action not in FEEDBACK_ACTIONS:
+            raise ValueError(f"Unknown feedback action {action!r}")
+        cur = self._exec(
+            "INSERT INTO feedback (doc_id, created_at, action, mode, ai, final, changed, ai_confidence, decision_model, "
+            "ocr_source, escalated, seconds_to_decide, processing_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (doc_id, now_iso(), action, mode, json.dumps(ai or {}, ensure_ascii=False),
+             json.dumps(final or {}, ensure_ascii=False), json.dumps(changed or []), ai_confidence, decision_model,
+             ocr_source, int(escalated), seconds_to_decide, processing_ms),
+        )
+        return self._feedback(self._query("SELECT * FROM feedback WHERE id = ?", (cur.lastrowid,))[0])
+
+    def list_feedback(self, since: str | None = None, include_undone: bool = False) -> list[Feedback]:
+        where, params = [], []
+        if since:
+            where.append("created_at >= ?")
+            params.append(since)
+        if not include_undone:
+            where.append("undone = 0")
+        sql = "SELECT * FROM feedback" + (f" WHERE {' AND '.join(where)}" if where else "") + " ORDER BY id"
+        return [self._feedback(r) for r in self._query(sql, tuple(params))]
+
+    def last_feedback(self, doc_id: int) -> Feedback | None:
+        rows = self._query("SELECT * FROM feedback WHERE doc_id = ? AND undone = 0 ORDER BY id DESC LIMIT 1", (doc_id,))
+        return self._feedback(rows[0]) if rows else None
+
+    def undo_feedback(self, feedback_id: int) -> None:
+        self._exec("UPDATE feedback SET undone = 1 WHERE id = ?", (feedback_id,))
 
 
 def _clean_aliases(aliases: list[str], name: str) -> list[str]:

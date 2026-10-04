@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nicegui import ui
+from nicegui import run, ui
 
 from ..services.engine import preview_path
 from . import theme
@@ -64,6 +64,7 @@ def show_document(doc_id: int) -> None:
                 with ui.row().classes("gap-2"):
                     ui.button("Open", icon="open_in_new", on_click=lambda: open_path(doc.current_path)).props("flat")
                     ui.button("Show in folder", icon="folder", on_click=lambda: reveal_path(doc.current_path)).props("flat")
+                _verdict_box(doc, dialog)
 
             with ui.column().classes("flex-grow gap-2").style("min-width: 0"):
                 with ui.tabs().classes("w-full").props("align=left dense") as tabs:
@@ -97,6 +98,59 @@ def show_document(doc_id: int) -> None:
                                                   subtitle=f"{stage.get('seconds', 0):.2f} s")
                         if doc.duration_ms:
                             ui.label(f"Total: {doc.duration_ms / 1000:.1f} s").classes("le-muted text-sm")
+    dialog.on("hide", dialog.delete)
+    dialog.open()
+
+
+def _verdict_box(doc, dialog) -> None:
+    """Human feedback on the AI's decision: confirm or fix filed letters, jump to approvals for waiting ones."""
+    c = ctx()
+    if doc.status in ("pending", "review"):
+        def go() -> None:
+            dialog.close()
+            ui.navigate.to("/approvals")
+
+        ui.button("Decide in Approvals", icon="fact_check", on_click=go).props("unelevated color=primary no-caps")
+        return
+    if doc.status != "filed":
+        return
+    last = c.db.last_feedback(doc.id)
+    with ui.column().classes("w-full gap-2 p-3 rounded-2xl").style("background: var(--le-soft)"):
+        if last is not None and last.verified:
+            with ui.row().classes("items-center gap-2"):
+                ui.icon("verified", color="positive")
+                label = {"accepted": "Accepted by you", "confirmed": "Confirmed by you",
+                         "corrected": f"Corrected by you ({', '.join(last.changed)})"}[last.action]
+                ui.label(label).classes("text-sm font-medium")
+        else:
+            ui.label("Filed automatically – was this right?").classes("text-sm font-medium")
+        with ui.row().classes("gap-2"):
+            if last is None or not last.verified:
+                async def confirm() -> None:
+                    await run.io_bound(c.engine.confirm, doc.id)
+                    ui.notify("Thanks – recorded as correct", type="positive")
+                    dialog.close()
+
+                ui.button("Yes, correct", icon="thumb_up", on_click=confirm).props("unelevated color=positive no-caps dense")
+            ui.button("Fix it", icon="edit", on_click=lambda: _fix_dialog(doc.id, dialog)) \
+                .props("outline color=primary no-caps dense")
+
+
+def _fix_dialog(doc_id: int, parent) -> None:
+    from .proposal_editor import ProposalEditor
+
+    doc = ctx().db.get_document(doc_id)
+    with ui.dialog() as dialog, ui.card().classes("le-card").style("width: 520px; max-width: 95vw"):
+        ui.label("Fix this letter").classes("text-lg font-semibold")
+        ui.label("The file is moved to the corrected place and the correction is recorded for training.") \
+            .classes("le-muted text-sm")
+
+        def done(message: str, _doc_id: int) -> None:
+            ui.notify(message, type="positive")
+            dialog.close()
+            parent.close()
+
+        ProposalEditor(doc, on_done=done, compact=True)
     dialog.on("hide", dialog.delete)
     dialog.open()
 

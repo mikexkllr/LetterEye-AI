@@ -59,11 +59,16 @@ class Settings(BaseModel):
     setup_completed: bool = False
     autostart: bool = True
 
+    # Workflow: "approve" = a human accepts or rejects every letter before it is filed (human in the loop),
+    # "automatic" = confident letters are filed directly, only unsure ones wait for a human.
+    workflow_mode: Literal["approve", "automatic"] = "approve"
+
     # Folders
     inbox_folder: str = ""
     output_folder: str = ""
     review_folder_name: str = "_Review"
     failed_folder_name: str = "_Failed"
+    rejected_folder_name: str = "_Rejected"
     process_existing_on_start: bool = True
     move_files: bool = True
     recursive_watch: bool = False
@@ -102,6 +107,11 @@ class Settings(BaseModel):
     # UI
     theme: Literal["auto", "light", "dark"] = "auto"
 
+    # Updates (installed builds only): "" = the channel this build came from
+    update_channel: Literal["", "stable", "dev"] = ""
+    auto_update: bool = True
+    update_check_minutes: int = 0  # 0 = automatic (dev: every 5 minutes, stable: hourly)
+
     @property
     def effective_extraction_model(self) -> str:
         return self.extraction_model or self.decision_model
@@ -113,6 +123,10 @@ class Settings(BaseModel):
     @property
     def failed_dir(self) -> Path:
         return Path(self.output_folder) / self.failed_folder_name
+
+    @property
+    def rejected_dir(self) -> Path:
+        return Path(self.output_folder) / self.rejected_folder_name
 
     def problems(self) -> list[str]:
         """Things that prevent the watcher from starting, in plain language."""

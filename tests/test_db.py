@@ -60,3 +60,31 @@ def test_documents_tracking_and_fingerprints(db, tmp_path):
     assert stored.trace == {"a": 1} and stored.status == "filed"
     assert db.count_by_status()["filed"] == 1
     assert db.list_documents(search="scan")[0].id == doc.id
+
+
+def test_old_databases_are_migrated(tmp_path):
+    import sqlite3
+
+    from lettereye.db import Database
+
+    path = tmp_path / "v1.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE documents (id INTEGER PRIMARY KEY, original_name TEXT NOT NULL, source_path TEXT NOT NULL,
+            current_path TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, stage TEXT NOT NULL DEFAULT '',
+            worker_id INTEGER, recipient_id INTEGER, recipient_name TEXT NOT NULL DEFAULT '',
+            sender TEXT NOT NULL DEFAULT '', letter_date TEXT NOT NULL DEFAULT '', doc_type TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL DEFAULT '', confidence REAL, ocr_source TEXT NOT NULL DEFAULT '',
+            ocr_text TEXT NOT NULL DEFAULT '', trace TEXT NOT NULL DEFAULT '{}', review_reason TEXT NOT NULL DEFAULT '',
+            error TEXT NOT NULL DEFAULT '', duration_ms INTEGER, fingerprint TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        INSERT INTO documents (original_name, source_path, status, created_at, updated_at)
+            VALUES ('old.pdf', '/x/old.pdf', 'filed', '2026-01-01', '2026-01-01');
+        PRAGMA user_version=1;
+    """)
+    conn.close()
+    db = Database(path)
+    doc = db.list_documents()[0]
+    assert doc.original_name == "old.pdf" and doc.proposal == {}
+    db.add_feedback(doc.id, "confirmed")
+    assert db.last_feedback(doc.id).verified

@@ -15,7 +15,7 @@ from .. import paths
 from ..ai.decision import DecisionEngine
 from ..ai.extraction import FactExtractor, LetterFacts
 from ..ai.ollama_service import OllamaService
-from ..db import Database, Document
+from ..db import Database, Document, now_iso
 from ..events import ActivityFeed
 from ..ocr.documents import save_preview
 from ..ocr.fast_ocr import FastOCR
@@ -159,8 +159,11 @@ class Engine:
         return self.start()
 
     def _on_settings_changed(self, settings: Settings) -> None:
-        if self.state == "running":
+        changed = {k for k, v in settings.model_dump().items() if getattr(self._settings, k, None) != v}
+        if self.state == "running" and changed - LIVE_SETTINGS:
             threading.Thread(target=self.restart, name="restart", daemon=True).start()
+        elif self.state == "running":
+            self._settings = settings  # takes effect for the next letter without restarting
 
     def _warm_up(self, settings: Settings) -> None:
         try:
@@ -263,18 +266,44 @@ class Engine:
                 pass
         self._apply(doc, analysis, path, settings, int((time.perf_counter() - started) * 1000))
 
+    def _proposal(self, analysis: Analysis, settings: Settings) -> dict[str, Any]:
+        """Snapshot of what the AI proposed, kept unchanged so human decisions can be compared with it."""
+        d = analysis.decision
+        return {
+            "verdict": analysis.status,  # what the AI would do on its own: filed | review
+            "worker": d.worker.name if d.worker else "",
+            "worker_id": d.worker.id if d.worker else None,
+            "recipient": d.recipient.name if d.recipient else analysis.new_recipient_name,
+            "recipient_id": d.recipient.id if d.recipient else None,
+            "new_recipient": bool(analysis.new_recipient_name and not d.recipient),
+            "recipient_read": analysis.facts.recipient_name,
+            "doc_type": d.doc_type,
+            "letter_date": analysis.letter_date,
+            "sender": analysis.facts.sender,
+            "subject": analysis.facts.subject,
+            "confidence": round(analysis.confidence, 4),
+            "doc_type_confidence": round(d.doc_type_confidence, 4),
+            "decision_model": settings.decision_model,
+            "ocr_source": analysis.ocr.source,
+            "escalated": analysis.escalated,
+            "reason": analysis.reason,
+            "ready_at": now_iso(),
+        }
+
     def _apply(self, doc: Document, analysis: Analysis, path: Path, settings: Settings, duration_ms: int) -> None:
         decision = analysis.decision
+        proposal = self._proposal(analysis, settings)
         common: dict[str, Any] = dict(
             stage="", sender=analysis.facts.sender, letter_date=analysis.letter_date, doc_type=decision.doc_type,
             subject=analysis.facts.subject, recipient_name=analysis.facts.recipient_name,
             confidence=round(analysis.confidence, 4), ocr_source=analysis.ocr.source, ocr_text=analysis.ocr.text,
-            trace=analysis.trace(), duration_ms=duration_ms,
+            trace=analysis.trace(), duration_ms=duration_ms, proposal=proposal,
             worker_id=decision.worker.id if decision.worker else None,
             recipient_id=decision.recipient.id if decision.recipient else None,
         )
         escalated = " (after OCR LLM)" if analysis.escalated else ""
-        if analysis.status == "filed" and decision.worker is not None:
+        confident = analysis.status == "filed" and decision.worker is not None
+        if confident and self.store.get().workflow_mode == "automatic":
             recipient = decision.recipient
             if recipient is None and analysis.new_recipient_name:
                 try:
@@ -288,12 +317,22 @@ class Engine:
                 target = transfer(path, Path(settings.output_folder) / rel, move=self._should_move(path, settings))
                 self.db.update_document(doc.id, status="filed", current_path=str(target), review_reason="",
                                         **{**common, "recipient_id": recipient.id})
+                self.db.add_feedback(doc.id, "auto_filed", mode="automatic", ai=_fields(proposal),
+                                     final=_fields(proposal), ai_confidence=proposal["confidence"],
+                                     decision_model=settings.decision_model, ocr_source=analysis.ocr.source,
+                                     escalated=analysis.escalated, processing_ms=duration_ms)
                 self.feed.add(f"Filed {doc.original_name} → {decision.worker.name} / {recipient.name} "
                               f"({analysis.confidence:.0%}){escalated}", "success", doc.id)
                 return
         target = self._park(path, settings.review_dir, settings)
-        self.db.update_document(doc.id, status="review", current_path=str(target), review_reason=analysis.reason, **common)
-        self.feed.add(f"Needs review: {doc.original_name} – {analysis.reason}", "warning", doc.id)
+        if confident:
+            self.db.update_document(doc.id, status="pending", current_path=str(target), review_reason="", **common)
+            self.feed.add(f"Ready for approval: {doc.original_name} → {proposal['worker']} / {proposal['recipient']} "
+                          f"({analysis.confidence:.0%}){escalated}", "ai", doc.id)
+        else:
+            self.db.update_document(doc.id, status="review", current_path=str(target), review_reason=analysis.reason,
+                                    **common)
+            self.feed.add(f"Needs review: {doc.original_name} – {analysis.reason}", "warning", doc.id)
 
     def _park(self, path: Path, folder: Path, settings: Settings) -> Path:
         """Move a letter into the review/failed folder (unless it is already there)."""
@@ -307,40 +346,139 @@ class Engine:
         """Originals in the inbox are copied in 'copy' mode; our own copies (review/failed) are always moved."""
         return settings.move_files or not self._in_inbox(path, settings)
 
-    # ----------------------------------------------------------------- user actions
-    def assign(self, doc_id: int, *, recipient_id: int | None = None, worker_id: int | None = None,
-               new_recipient_name: str = "", doc_type: str | None = None, learn_alias: bool = True) -> Path:
-        """File a document from the review queue by hand. Optionally remember the spelling for next time."""
+    # ----------------------------------------------------------------- human in the loop
+    def approve(self, doc_id: int, *, recipient_id: int | None = None, worker_id: int | None = None,
+                new_recipient_name: str = "", doc_type: str | None = None, letter_date: str | None = None,
+                sender: str | None = None, subject: str | None = None, learn_alias: bool = True) -> Path:
+        """Accept the AI's proposal (no arguments) or file the letter with corrections.
+
+        Works for letters waiting for approval or review, and for letters already filed (a correction after
+        the fact moves the file). Every call is recorded as feedback for the metrics and training data.
+        """
+        doc = self.db.get_document(doc_id)
+        if doc is None:
+            raise ValueError("Document not found.")
+        if doc.status not in ("pending", "review", "filed"):
+            raise ValueError("This letter is not waiting for a decision.")
+        settings = self.store.get()
+        proposal = doc.proposal or {}
+        recipient = self._pick_recipient(doc, recipient_id, worker_id, new_recipient_name)
+        worker = self.db.get_worker(recipient.worker_id)
+        assert worker is not None
+        final = {
+            "worker": worker.name,
+            "recipient": recipient.name,
+            "doc_type": doc.doc_type if doc_type is None else doc_type,
+            "letter_date": doc.letter_date if letter_date is None else letter_date,
+            "sender": doc.sender if sender is None else sender,
+            "subject": doc.subject if subject is None else subject,
+        }
+        source = Path(doc.current_path)
+        if not source.exists():
+            raise FileNotFoundError(f"The file is no longer at {source}")
+        facts = LetterFacts(sender_organization=final["sender"], subject=final["subject"])
+        rel = relative_target(settings, worker, recipient.name, recipient.folder, facts, final["letter_date"],
+                              final["doc_type"], Path(doc.original_name))
+        destination = Path(settings.output_folder) / rel
+        target = source if source == destination else transfer(source, destination, move=True)
+
+        if doc.status == "filed":  # a correction after the fact replaces the earlier verdict
+            previous = self.db.last_feedback(doc_id)
+            if previous and previous.action in ("accepted", "corrected", "confirmed"):
+                self.db.undo_feedback(previous.id)
+        changed = [k for k in FIELDS if _norm(final[k]) != _norm(proposal.get(k, ""))]
+        action = "corrected" if changed else ("confirmed" if doc.status == "filed" else "accepted")
+        self.db.update_document(doc_id, status="filed", current_path=str(target), worker_id=worker.id,
+                                recipient_id=recipient.id, doc_type=final["doc_type"],
+                                letter_date=final["letter_date"], sender=final["sender"], subject=final["subject"],
+                                review_reason="")
+        self.db.add_feedback(doc_id, action, mode=settings.workflow_mode, ai=_fields(proposal), final=final,
+                             changed=changed, ai_confidence=doc.confidence,
+                             decision_model=proposal.get("decision_model", ""), ocr_source=doc.ocr_source,
+                             escalated=bool(proposal.get("escalated")),
+                             seconds_to_decide=_seconds_since(proposal.get("ready_at") or doc.updated_at),
+                             processing_ms=doc.duration_ms)
+        verb = {"accepted": "Accepted", "confirmed": "Confirmed", "corrected": "Corrected"}[action]
+        detail = f" ({', '.join(changed)})" if changed else ""
+        self.feed.add(f"{verb}: {doc.original_name} → {worker.name} / {recipient.name}{detail}", "success", doc_id)
+        spelling = clean_person_name(doc.recipient_name)
+        if learn_alias and "recipient" in changed and len(spelling) >= 3 and self.db.add_alias(recipient.id, spelling):
+            self.feed.add(f"Learned: '{spelling}' is {recipient.name}", "ai", doc_id)
+        return target
+
+    assign = approve  # name used by the first version
+
+    def confirm(self, doc_id: int) -> None:
+        """'This was right' for a letter the AI filed on its own – turns it into verified training data."""
+        doc = self.db.get_document(doc_id)
+        if doc is None or doc.status != "filed":
+            raise ValueError("Only filed letters can be confirmed.")
+        self.approve(doc_id, learn_alias=False)
+
+    def approve_many(self, doc_ids: list[int]) -> tuple[int, list[str]]:
+        done, problems = 0, []
+        for doc_id in doc_ids:
+            try:
+                self.approve(doc_id)
+                done += 1
+            except Exception as exc:
+                problems.append(str(exc))
+        return done, problems
+
+    def reject(self, doc_id: int, reason: str = "Not a letter") -> Path:
+        """Set a letter aside: it is moved to the rejected folder and not filed."""
         doc = self.db.get_document(doc_id)
         if doc is None:
             raise ValueError("Document not found.")
         settings = self.store.get()
+        source = Path(doc.current_path)
+        target = transfer(source, settings.rejected_dir / source.name, move=True) if source.exists() else source
+        self.db.update_document(doc_id, status="ignored", current_path=str(target), review_reason=reason)
+        proposal = doc.proposal or {}
+        self.db.add_feedback(doc_id, "rejected", mode=settings.workflow_mode, ai=_fields(proposal),
+                             final={"reason": reason}, ai_confidence=doc.confidence,
+                             decision_model=proposal.get("decision_model", ""), ocr_source=doc.ocr_source,
+                             escalated=bool(proposal.get("escalated")),
+                             seconds_to_decide=_seconds_since(proposal.get("ready_at") or doc.updated_at))
+        self.feed.add(f"Set aside: {doc.original_name} – {reason}", "info", doc_id)
+        return target
+
+    dismiss = reject
+
+    def undo(self, doc_id: int) -> None:
+        """Take back the last human decision: the letter returns to the approval queue."""
+        doc = self.db.get_document(doc_id)
+        last = self.db.last_feedback(doc_id) if doc else None
+        if doc is None or last is None or last.action not in ("accepted", "corrected", "confirmed", "rejected"):
+            raise ValueError("Nothing to undo for this letter.")
+        settings = self.store.get()
+        proposal = doc.proposal or {}
+        source = Path(doc.current_path)
+        target = transfer(source, settings.review_dir / doc.original_name, move=True) if source.exists() else source
+        status = "pending" if proposal.get("verdict") == "filed" else "review"
+        self.db.update_document(
+            doc_id, status=status, current_path=str(target), worker_id=proposal.get("worker_id"),
+            recipient_id=proposal.get("recipient_id"), doc_type=proposal.get("doc_type", doc.doc_type),
+            letter_date=proposal.get("letter_date", doc.letter_date), sender=proposal.get("sender", doc.sender),
+            subject=proposal.get("subject", doc.subject), review_reason=proposal.get("reason", ""))
+        self.db.undo_feedback(last.id)
+        self.feed.add(f"Undone: {doc.original_name} is back in the approval queue", "info", doc_id)
+
+    def _pick_recipient(self, doc: Document, recipient_id: int | None, worker_id: int | None, new_name: str):
         if recipient_id is not None:
             recipient = self.db.get_recipient(recipient_id)
-        elif worker_id is not None and new_recipient_name.strip():
-            recipient = self.db.find_recipient(new_recipient_name) or self.db.create_recipient(worker_id, new_recipient_name)
+        elif worker_id is not None and new_name.strip():
+            recipient = self.db.find_recipient(new_name) or self.db.create_recipient(worker_id, new_name)
+        elif doc.recipient_id is not None:
+            recipient = self.db.get_recipient(doc.recipient_id)
+        elif doc.proposal.get("new_recipient") and doc.proposal.get("worker_id"):
+            name = doc.proposal["recipient"]
+            recipient = self.db.find_recipient(name) or self.db.create_recipient(doc.proposal["worker_id"], name)
         else:
-            raise ValueError("Choose a recipient or enter a new one.")
+            raise ValueError("Choose a recipient first.")
         if recipient is None:
             raise ValueError("Recipient not found.")
-        worker = self.db.get_worker(recipient.worker_id)
-        assert worker is not None
-        source = Path(doc.current_path)
-        if not source.exists():
-            raise FileNotFoundError(f"The file is no longer at {source}")
-        facts = LetterFacts.model_validate(doc.trace.get("facts", {}))
-        final_type = doc_type or doc.doc_type or (settings.document_types[-1].name if settings.document_types else "")
-        rel = relative_target(settings, worker, recipient.name, recipient.folder, facts, doc.letter_date, final_type,
-                              Path(doc.original_name))
-        target = transfer(source, Path(settings.output_folder) / rel, move=True)
-        trace = {**doc.trace, "manual": {"recipient": recipient.name, "worker": worker.name, "type": final_type}}
-        self.db.update_document(doc_id, status="filed", current_path=str(target), worker_id=worker.id,
-                                recipient_id=recipient.id, doc_type=final_type, review_reason="", trace=trace)
-        self.feed.add(f"Filed by hand: {doc.original_name} → {worker.name} / {recipient.name}", "success", doc_id)
-        spelling = clean_person_name(doc.recipient_name)
-        if learn_alias and len(spelling) >= 3 and self.db.add_alias(recipient.id, spelling):
-            self.feed.add(f"Learned: '{spelling}' is {recipient.name}", "ai", doc_id)
-        return target
+        return recipient
 
     def reprocess(self, doc_id: int) -> None:
         doc = self.db.get_document(doc_id)
@@ -351,10 +489,6 @@ class Engine:
         self.db.update_document(doc_id, status="queued", stage="Queued for another try", error="")
         self._queue.put(doc_id)
         self.feed.add(f"Re-running AI on {doc.original_name}", "info", doc_id)
-
-    def dismiss(self, doc_id: int) -> None:
-        self.db.update_document(doc_id, status="ignored", review_reason="Dismissed")
-        self.feed.touch()
 
     def analyze_file(self, path: str | Path, on_stage=None) -> Analysis:
         """Dry run for the 'Test a letter' feature: full pipeline, nothing is moved or saved."""
@@ -368,3 +502,26 @@ class Engine:
     @property
     def queue_size(self) -> int:
         return self._queue.qsize()
+
+
+FIELDS = ("worker", "recipient", "doc_type", "letter_date", "sender", "subject")
+# Settings that apply immediately; changing anything else restarts the watcher.
+LIVE_SETTINGS = {"workflow_mode", "theme", "update_channel", "auto_update", "update_check_minutes", "autostart",
+                 "setup_completed"}
+
+
+def _fields(values: dict[str, Any]) -> dict[str, Any]:
+    return {key: values.get(key, "") or "" for key in FIELDS}
+
+
+def _norm(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _seconds_since(iso: str | None) -> float | None:
+    from datetime import UTC, datetime
+
+    try:
+        return round((datetime.now(UTC) - datetime.fromisoformat(iso)).total_seconds(), 1) if iso else None
+    except ValueError:
+        return None
