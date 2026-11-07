@@ -55,6 +55,34 @@ def default_document_types(language: str) -> list[DocumentType]:
     return [t.model_copy() for t in DEFAULT_DOCUMENT_TYPES.get(language, DEFAULT_DOCUMENT_TYPES["en"])]
 
 
+ProviderKind = Literal["ollama", "openai", "anthropic", "google"]
+Role = Literal["decision", "extraction", "ocr_llm"]
+LOCAL_OLLAMA_ID = "ollama"
+ROLE_TITLES: dict[str, str] = {"decision": "decision model", "extraction": "extraction model", "ocr_llm": "OCR LLM"}
+
+
+class ProviderConfig(BaseModel):
+    """Where models run: the local Ollama server, or an API you bring your own key for.
+
+    `kind` is the API dialect, so one kind covers many services: "openai" is any OpenAI-compatible API
+    (OpenAI, OpenRouter, Groq, Mistral, DeepSeek, Together, LM Studio, vLLM, llama.cpp, …), "anthropic" any
+    Anthropic-compatible one, "google" the Gemini API or a compatible gateway. API keys are never stored in
+    the settings file; they live in the secret store (see api_keys.py), keyed by `id`.
+    """
+
+    id: str
+    name: str
+    kind: ProviderKind
+    base_url: str = ""  # empty = the official endpoint of that kind
+    api_key_env: str = ""  # optional: environment variable to read the key from when none is stored
+    key_hint: str = ""  # last characters of the stored key, only for display ("••••a1B2")
+    preset: str = ""  # the preset it was created from (notes, links and model hints in the UI)
+
+
+def local_ollama(url: str) -> ProviderConfig:
+    return ProviderConfig(id=LOCAL_OLLAMA_ID, name="Ollama (this computer)", kind="ollama", base_url=url)
+
+
 class Settings(BaseModel):
     setup_completed: bool = False
     autostart: bool = True
@@ -76,13 +104,22 @@ class Settings(BaseModel):
     # Language of the letters (OCR hint, subject language, default document types)
     language: str = "de"
 
-    # Local AI (Ollama)
+    # AI models. Every model call goes through LangChain. Each role runs on a provider: "ollama" is the
+    # built-in local Ollama server at `ollama_url`; `providers` holds the APIs added with your own key.
     ollama_url: str = "http://127.0.0.1:11434"
+    providers: list[ProviderConfig] = Field(default_factory=list)
+    decision_provider: str = LOCAL_OLLAMA_ID
     decision_model: str = "qwen3.5:4b"
+    extraction_provider: str = ""  # empty = the decision model's provider
     extraction_model: str = ""  # empty = use the decision model
+    ocr_llm_provider: str = LOCAL_OLLAMA_ID
     ocr_llm_model: str = "glm-ocr"
-    keep_alive: str = "15m"
-    num_ctx: int = 8192
+    keep_alive: str = "15m"  # Ollama only
+    num_ctx: int = 8192  # Ollama only (also sizes the decision prompt)
+    # How the decision model reports probabilities: "logprobs" reads token probabilities (one forward pass,
+    # best calibrated), "structured" asks for a probability per option as structured output (for APIs without
+    # token probabilities, e.g. Anthropic), "auto" uses logprobs when the API returns them, else structured.
+    decision_method: Literal["auto", "logprobs", "structured"] = "auto"
 
     # OCR
     ocr_mode: Literal["auto", "fast_only", "llm_always"] = "auto"
@@ -118,6 +155,38 @@ class Settings(BaseModel):
         return self.extraction_model or self.decision_model
 
     @property
+    def effective_extraction_provider(self) -> str:
+        return self.extraction_provider or self.decision_provider
+
+    def all_providers(self) -> list[ProviderConfig]:
+        """The built-in local Ollama first, then the providers the user added."""
+        return [local_ollama(self.ollama_url), *(p for p in self.providers if p.id != LOCAL_OLLAMA_ID)]
+
+    def provider(self, provider_id: str) -> ProviderConfig | None:
+        return next((p for p in self.all_providers() if p.id == provider_id), None)
+
+    def role(self, role: Role) -> tuple[ProviderConfig | None, str]:
+        """(provider, model) a role runs on."""
+        if role == "decision":
+            return self.provider(self.decision_provider), self.decision_model
+        if role == "extraction":
+            return self.provider(self.effective_extraction_provider), self.effective_extraction_model
+        return self.provider(self.ocr_llm_provider), self.ocr_llm_model
+
+    def active_roles(self) -> list[Role]:
+        roles: list[Role] = ["decision", "extraction"]
+        if self.ocr_mode != "fast_only" and self.ocr_llm_model:
+            roles.append("ocr_llm")
+        return roles
+
+    def model_label(self, role: Role) -> str:
+        """'qwen3.5:4b' for the local Ollama, 'gpt-4.1-mini · OpenAI' for other providers."""
+        provider, model = self.role(role)
+        if provider is None or provider.id == LOCAL_OLLAMA_ID:
+            return model
+        return f"{model} · {provider.name}"
+
+    @property
     def review_dir(self) -> Path:
         return Path(self.output_folder) / self.review_folder_name
 
@@ -146,6 +215,13 @@ class Settings(BaseModel):
                 issues.append("The output folder is inside the inbox; turn off 'watch subfolders'.")
         if not self.document_types:
             issues.append("Add at least one document type.")
+        for role in self.active_roles():
+            provider, model = self.role(role)
+            title = ROLE_TITLES[role]
+            if provider is None:
+                issues.append(f"The provider of the {title} was removed. Choose one in Settings → AI models.")
+            elif not model.strip():
+                issues.append(f"No model chosen for the {title} on {provider.name} (Settings → AI models).")
         return issues
 
 

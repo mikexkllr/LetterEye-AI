@@ -8,9 +8,11 @@ from nicegui import run, ui
 
 from ... import paths
 from ...ai.ollama_service import OllamaService, normalize_model_name
+from ...ai.providers import base_url
 from ...settings import LANGUAGES, default_document_types
 from ..context import ctx
 from ..models_panel import ModelsPanel
+from ..providers_panel import AiDraft
 from ..widgets import folder_field, pick_folder, worker_avatar
 
 
@@ -19,7 +21,10 @@ def page(first_run: bool = False) -> None:
     s = c.store.get()
     draft = {
         "language": s.language,
+        "providers": [p.model_dump() for p in s.providers],
+        "decision_provider": s.decision_provider,
         "decision_model": s.decision_model,
+        "ocr_llm_provider": s.ocr_llm_provider,
         "ocr_llm_model": s.ocr_llm_model,
         "inbox_folder": s.inbox_folder or str(paths.default_inbox()),
         "output_folder": s.output_folder or str(paths.default_output()),
@@ -28,10 +33,13 @@ def page(first_run: bool = False) -> None:
     def put(key: str, value) -> None:
         draft[key] = value
 
+    ai = AiDraft(draft, put, c.engine.keys)
+
     def persist(**extra) -> None:
         changes = dict(draft, **extra)
         if changes["language"] != c.store.get().language:
             changes["document_types"] = default_document_types(changes["language"])
+        ai.apply_keys()
         c.store.update(**changes)
 
     outer = "w-full min-h-screen items-center py-10 px-4" if first_run else "le-page items-center"
@@ -69,7 +77,8 @@ def page(first_run: bool = False) -> None:
                                 ui.label(text).classes("text-sm le-muted")
                     with ui.row().classes("items-center gap-3 mt-2"):
                         ui.icon("lock", color="positive")
-                        ui.label("Everything runs on this computer. No letter ever leaves it.").classes("text-sm font-medium")
+                        ui.label("By default everything runs on this computer – no letter leaves it. Prefer a cloud "
+                                 "model? Bring your own API key in the next step.").classes("text-sm font-medium")
                     ui.select(LANGUAGES, value=draft["language"], label="Language of your letters",
                               on_change=lambda e: put("language", e.value)).props("outlined").classes("w-72 mt-4")
                     with ui.stepper_navigation():
@@ -78,10 +87,11 @@ def page(first_run: bool = False) -> None:
 
                 # ----------------------------------------------------------- 2 AI engine
                 with ui.step("AI engine", icon="memory"):
-                    ui.label("Local AI models").classes("text-xl font-semibold")
-                    ui.label("LetterEye uses Ollama to run models on your GPU. Pick the models and download them; "
-                             "downloads continue in the background.").classes("le-muted text-sm")
-                    ModelsPanel(draft["decision_model"], draft["ocr_llm_model"], "auto", put)
+                    ui.label("AI models").classes("text-xl font-semibold")
+                    ui.label("LetterEye runs models on your GPU with Ollama – pick them and download them; downloads "
+                             "continue in the background. Or choose “Add an API provider” to use OpenAI, Anthropic, "
+                             "Google Gemini or any OpenAI-compatible API with your own key.").classes("le-muted text-sm")
+                    ModelsPanel(ai, "auto")
                     with ui.row().classes("items-center gap-3 mt-2 p-4 rounded-2xl w-full").style("background: var(--le-soft)"):
                         ui.icon("bolt", size="26px").classes("le-gradient-text")
                         with ui.column().classes("gap-0 flex-grow"):
@@ -100,10 +110,17 @@ def page(first_run: bool = False) -> None:
 
                     async def next_from_models() -> None:
                         persist()
-                        service = OllamaService(c.store.get().ollama_url)
-                        installed = await run.io_bound(service.list_models)
-                        missing = [m for m in (draft["decision_model"], draft["ocr_llm_model"])
-                                   if normalize_model_name(m) not in {normalize_model_name(i) for i in installed}]
+                        settings = c.store.get()
+                        missing = []
+                        for role in ("decision", "ocr_llm"):
+                            provider, model = settings.role(role)
+                            if not model.strip():
+                                missing.append(f"a {'decision model' if role == 'decision' else 'OCR LLM'}")
+                            elif provider is not None and provider.kind == "ollama":
+                                service = OllamaService(base_url(provider), api_key=ai.api_key(provider))
+                                installed = await run.io_bound(service.list_models)
+                                if normalize_model_name(model) not in {normalize_model_name(i) for i in installed}:
+                                    missing.append(model)
                         if missing:
                             ui.notify(f"Still downloading or missing: {', '.join(missing)}. You can continue – "
                                       "LetterEye starts once they are ready.", type="warning", timeout=6000)
@@ -224,9 +241,10 @@ def page(first_run: bool = False) -> None:
                             checks = [
                                 ("Inbox", settings.inbox_folder, True),
                                 ("Sorted letters", settings.output_folder, True),
-                                ("Decision model", settings.decision_model,
-                                 not any(settings.decision_model in p for p in problems)),
-                                ("OCR LLM", settings.ocr_llm_model, not any(settings.ocr_llm_model in p for p in problems)),
+                                ("Decision model", settings.model_label("decision"),
+                                 not any(settings.decision_model in p or "decision" in p for p in problems)),
+                                ("OCR LLM", settings.model_label("ocr_llm"),
+                                 not any(settings.ocr_llm_model in p or "OCR LLM" in p for p in problems)),
                                 ("Workers", f"{len(c.db.list_workers())} workers · {len(c.db.list_recipients())} recipients",
                                  bool(c.db.list_workers())),
                             ]

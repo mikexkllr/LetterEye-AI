@@ -5,6 +5,7 @@ from __future__ import annotations
 from nicegui import app, ui
 
 from .. import APP_NAME, paths
+from ..ai.providers import remote_providers
 from . import theme
 from .context import ctx
 from .pages import approvals, dashboard, documents, insights, settings_page, setup, workers
@@ -56,7 +57,8 @@ def root() -> None:
                 ui.image("/assets/icon.png").classes("w-10 h-10")
                 with ui.column().classes("gap-0"):
                     ui.label("LetterEye").classes("text-white text-lg font-bold leading-tight")
-                    ui.label("AI · local").classes("text-xs text-slate-400 leading-tight")
+                    ui.label("AI · local + cloud" if remote_providers(settings) else "AI · local") \
+                        .classes("text-xs text-slate-400 leading-tight")
             for path, label, icon in NAV:
                 with ui.row().classes("le-nav-item items-center w-full no-wrap") as item:
                     ui.icon(icon, size="20px")

@@ -12,14 +12,15 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths
-from ..ai.decision import DecisionEngine
-from ..ai.extraction import FactExtractor, LetterFacts
+from ..ai import factory
+from ..ai.extraction import LetterFacts
 from ..ai.ollama_service import OllamaService
+from ..ai.providers import KINDS, api_key_for, base_url, needs_key
+from ..api_keys import SecretStore
 from ..db import Database, Document, now_iso
 from ..events import ActivityFeed
 from ..ocr.documents import save_preview
 from ..ocr.fast_ocr import FastOCR
-from ..ocr.llm_ocr import LlmOCR
 from ..pipeline.filing import transfer
 from ..pipeline.names import clean_person_name
 from ..pipeline.processor import Analysis, Directory, Processor, relative_target
@@ -50,10 +51,11 @@ class Current:
 
 
 class Engine:
-    def __init__(self, db: Database, store: SettingsStore, feed: ActivityFeed):
+    def __init__(self, db: Database, store: SettingsStore, feed: ActivityFeed, keys: SecretStore | None = None):
         self.db = db
         self.store = store
         self.feed = feed
+        self.keys = keys if keys is not None else SecretStore()
         self.state = "stopped"  # stopped | starting | running | stopping
         self.current: Current | None = None
         self.last_error = ""
@@ -79,30 +81,42 @@ class Engine:
         return self._fast_ocr
 
     def build_processor(self, settings: Settings) -> Processor:
-        decision = DecisionEngine(settings.ollama_url, settings.decision_model, num_ctx=settings.num_ctx,
-                                  keep_alive=settings.keep_alive, debias=settings.debias_order)
-        extractor = FactExtractor(settings.ollama_url, settings.effective_extraction_model, language=settings.language,
-                                  num_ctx=settings.num_ctx, keep_alive=settings.keep_alive)
+        """The pipeline with every AI role on its configured provider (all model calls through LangChain)."""
+        decision = factory.build_decision_engine(settings, self.keys)
+        extractor = factory.build_extractor(settings, self.keys)
         llm_ocr = None
-        if settings.ocr_mode != "fast_only" and settings.ocr_llm_model:
-            llm_ocr = LlmOCR(settings.ollama_url, settings.ocr_llm_model, keep_alive=settings.keep_alive)
+        if "ocr_llm" in settings.active_roles():
+            llm_ocr = factory.build_llm_ocr(settings, self.keys)
         return Processor(settings, decision, extractor, self.fast_ocr(settings), llm_ocr, self.directory)
 
     def preflight(self, settings: Settings | None = None) -> list[str]:
         """Everything that must be true before letters can be processed, as user-facing messages."""
         settings = settings or self.store.get()
         problems = settings.problems()
-        ollama = OllamaService(settings.ollama_url)
-        if ollama.version() is None:
-            problems.append(f"Ollama is not reachable at {settings.ollama_url}. Is it installed and running?")
-            return problems
-        needed = [settings.decision_model, settings.effective_extraction_model]
-        if settings.ocr_mode != "fast_only":
-            needed.append(settings.ocr_llm_model)
-        for model in dict.fromkeys(m for m in needed if m):
-            if not ollama.has_model(model):
+        servers: dict[str, OllamaService | None] = {}  # Ollama servers, checked once each
+        for role in settings.active_roles():
+            provider, model = settings.role(role)
+            if provider is None or not model.strip():
+                continue  # already reported by settings.problems()
+            key = api_key_for(provider, self.keys)
+            if provider.kind != "ollama":
+                if needs_key(provider) and not key:
+                    problems.append(f"No API key for {provider.name} yet (Settings → AI models).")
+                continue
+            url = base_url(provider)
+            if url not in servers:
+                service = OllamaService(url, api_key=key)
+                servers[url] = service if service.version() is not None else None
+                if servers[url] is None:
+                    problems.append(f"Ollama is not reachable at {url}. Is it installed and running?")
+            service = servers[url]
+            if service is not None and not service.has_model(model):
                 problems.append(f"Model '{model}' is not downloaded yet (Settings → AI models).")
-        return problems
+        decision_provider = settings.provider(settings.decision_provider)
+        if settings.decision_method == "logprobs" and decision_provider and not KINDS[decision_provider.kind].logprobs:
+            problems.append(f"{decision_provider.name} returns no token probabilities – set the decision method "
+                            "to Auto or Structured (Settings → Decisions).")
+        return list(dict.fromkeys(problems))
 
     # ----------------------------------------------------------------- lifecycle
     def start(self) -> list[str]:
@@ -114,9 +128,15 @@ class Engine:
             if problems:
                 self.last_error = problems[0]
                 return problems
+            try:
+                processor = self.build_processor(settings)
+            except Exception as exc:  # e.g. a provider that cannot be set up with these settings
+                log.exception("Could not set up the AI models")
+                self.last_error = str(exc)
+                return [str(exc)]
             self.state = "starting"
             self._settings = settings
-            self._processor = self.build_processor(settings)
+            self._processor = processor
             self._stop = threading.Event()  # a fresh event per run: an old worker still busy keeps its own
             self._recover_interrupted(settings)
             self._thread = threading.Thread(target=self._loop, args=(self._stop,), name="lettereye-worker", daemon=True)
@@ -168,7 +188,7 @@ class Engine:
     def _warm_up(self, settings: Settings) -> None:
         try:
             self.ocr_device = self.fast_ocr(settings).warm_up()
-            OllamaService(settings.ollama_url).warm_up(settings.decision_model, settings.keep_alive)
+            factory.warm_up(settings, self.keys)
             self.feed.touch()
         except Exception as exc:
             log.warning("Warm-up failed: %s", exc)
@@ -283,7 +303,8 @@ class Engine:
             "subject": analysis.facts.subject,
             "confidence": round(analysis.confidence, 4),
             "doc_type_confidence": round(d.doc_type_confidence, 4),
-            "decision_model": settings.decision_model,
+            "decision_model": settings.model_label("decision"),
+            "decision_method": _methods(d.decisions),
             "ocr_source": analysis.ocr.source,
             "escalated": analysis.escalated,
             "reason": analysis.reason,
@@ -319,7 +340,7 @@ class Engine:
                                         **{**common, "recipient_id": recipient.id})
                 self.db.add_feedback(doc.id, "auto_filed", mode="automatic", ai=_fields(proposal),
                                      final=_fields(proposal), ai_confidence=proposal["confidence"],
-                                     decision_model=settings.decision_model, ocr_source=analysis.ocr.source,
+                                     decision_model=proposal["decision_model"], ocr_source=analysis.ocr.source,
                                      escalated=analysis.escalated, processing_ms=duration_ms)
                 self.feed.add(f"Filed {doc.original_name} → {decision.worker.name} / {recipient.name} "
                               f"({analysis.confidence:.0%}){escalated}", "success", doc.id)
@@ -508,6 +529,13 @@ FIELDS = ("worker", "recipient", "doc_type", "letter_date", "sender", "subject")
 # Settings that apply immediately; changing anything else restarts the watcher.
 LIVE_SETTINGS = {"workflow_mode", "theme", "update_channel", "auto_update", "update_check_minutes", "autostart",
                  "setup_completed"}
+
+
+def _methods(decisions: list[dict[str, Any]]) -> str:
+    """How the decision model produced its probabilities for this letter: logprobs, structured or both."""
+    used = {m for d in decisions for m in (["logprobs", "structured"] if d.get("method") == "both" else [d.get("method")])
+            if m}
+    return "both" if len(used) > 1 else next(iter(used), "")
 
 
 def _fields(values: dict[str, Any]) -> dict[str, Any]:

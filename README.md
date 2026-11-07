@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Scanned letters sort themselves – with AI that runs entirely on your own computer.</b><br>
-  Windows · macOS · Linux · GPU-accelerated · no cloud, no API keys
+  Windows · macOS · Linux · GPU-accelerated · local by default – or bring your own API key
 </p>
 
 ---
@@ -18,6 +18,8 @@ works out who it is for, and the PDF is filed into `Worker / Recipient / 2026-03
   *Automatic* (confident letters are filed, unsure ones wait). Corrections take one click and are learned.
 - **Measurable:** every decision is logged – accuracy, calibration, a threshold simulator and an export of
   labelled training data to fine-tune the model.
+- **Local or your own API key:** models run on your GPU with Ollama – or, per role, on any OpenAI-compatible,
+  Anthropic-compatible or Google Gemini API with your own key. Every model call goes through LangChain.
 - **Updates itself:** install once from GitHub Releases; every push to `main` (stable) or `dev` (testing)
   reaches the installed app automatically.
 
@@ -59,7 +61,9 @@ hand-written CSV files.
 5. **Approve or file.** In approval mode the proposal waits for a person; in automatic mode letters above
    your threshold (default 80 %) are filed and the rest wait for a person.
 
-All models run through **[Ollama](https://ollama.com)** with **LangChain** (`langchain-ollama`).
+By default all models run locally through **[Ollama](https://ollama.com)**. Every model call – local or cloud –
+goes through **LangChain**, so each role can also run on an API you bring your own key for
+([see below](#local-or-cloud-bring-your-own-api-key)).
 
 Every decision is visible in the app – here the letter above was routed to Bob Smith with 99.6 %, double-checked
 with a yes/no question (92 %) and typed as an invoice (97 %):
@@ -72,7 +76,7 @@ with a yes/no question (92 %) and typed as an invoice (97 %):
 |---|---|
 | **OS** | Windows 10/11 (primary), macOS 13+, Linux |
 | **GPU** | Recommended. 6 GB VRAM runs the default models comfortably; 4 GB works with the small model. Without a GPU everything still works, just slowly. |
-| **Ollama** | Free, from [ollama.com/download](https://ollama.com/download). Uses CUDA / ROCm / Metal automatically. |
+| **Ollama** | Free, from [ollama.com/download](https://ollama.com/download). Uses CUDA / ROCm / Metal automatically. Not needed if every model runs on an API provider. |
 | **Disk** | ~6 GB for the default models |
 
 Python is installed automatically by the start script (via [uv](https://docs.astral.sh/uv/)).
@@ -188,6 +192,43 @@ Light and dark mode follow your system (or pick one in Settings → General).
 Models are downloaded from inside the app. The dashboard shows whether each model sits fully in GPU
 memory.
 
+## Local or cloud: bring your own API key
+
+Each AI role – **decision model**, **OCR LLM** and (under *Advanced*) the **extraction model** – runs on a
+*provider*. The local Ollama is built in; add more in **Settings → AI models → Add provider** (or in the setup
+assistant under *Runs on → Add an API provider*):
+
+| Kind | LangChain adapter | Works with |
+|---|---|---|
+| Ollama | `langchain-ollama` | this computer, or Ollama on a stronger PC in your network |
+| OpenAI-compatible | `langchain-openai` | OpenAI, OpenRouter, Groq, Mistral, DeepSeek, Together, LM Studio, vLLM, llama.cpp, LocalAI, … |
+| Anthropic-compatible | `langchain-anthropic` | Anthropic (Claude) and APIs that speak its format |
+| Google | `langchain-google-genai` | Google Gemini, or a Google-compatible gateway |
+
+Pick a preset, paste your key, *Test connection* – the model list then comes from the provider, and **Check**
+asks the decision model one test question and shows how it answered.
+
+**How the decision model gets its probabilities.** The typed decisions read the model's *token probabilities*
+(logprobs). Ollama and OpenAI-compatible APIs return them through LangChain – including a decision model you
+fine-tuned on LetterEye's exported training data and serve with vLLM or llama.cpp. Anthropic's API has no token
+probabilities (and LangChain's Gemini adapter does not pass them on), so there the model states a probability per
+option as **structured output** (a tool call / JSON schema) – still restricted to your options, but the model's
+own estimate, usually a little over-confident. *Settings → Decisions* chooses: **Auto** (logprobs when the API
+returns them, otherwise structured – the default), *token probabilities only*, or *structured only*. Every
+decision in the app shows which method produced it.
+
+APIs differ in what they accept; LetterEye adapts at runtime (no thinking mode, fixed temperature, fewer top
+logprobs, no tool calling) and retries without the rejected option.
+
+**Privacy.** With an API provider the letter's recognized text (decision and extraction model) or page images
+(OCR LLM) are sent to that provider. The app says so next to every model that does this; check the provider's
+data-processing terms. Providers in your own network (Ollama on another PC, LM Studio, vLLM) keep letters with you.
+
+**API keys** are never written to `settings.json`. They are stored in `secrets.json` in the data folder –
+encrypted with Windows DPAPI for your Windows user, and readable only by your user (file mode 600) on macOS and
+Linux. A provider can also read its key from an environment variable (e.g. `OPENAI_API_KEY` for the OpenAI preset);
+a key is only ever sent to the provider it belongs to.
+
 OCR strategies (Settings → OCR & GPU):
 
 * **Smart** (default): fast OCR first, the OCR LLM only when the decision model is unsure.
@@ -199,6 +240,7 @@ OCR strategies (Settings → OCR & GPU):
 | | |
 |---|---|
 | Settings, database, OCR models, logs | `%LOCALAPPDATA%\LetterEye` (Windows), `~/Library/Application Support/LetterEye` (macOS), `~/.local/share/LetterEye` (Linux) |
+| API keys | `secrets.json` in the same folder (DPAPI-encrypted on Windows, mode 600 elsewhere) |
 | Uncertain letters | `<output>\_Review` |
 | Letters that could not be processed | `<output>\_Failed` |
 
@@ -237,7 +279,7 @@ Ollama once.
 ## Development
 
 ```bash
-uv run --extra dev pytest          # 73 tests, no GPU or Ollama needed (the AI is faked)
+uv run --extra dev pytest          # 112 tests, no GPU, Ollama or API key needed (the AI is faked)
 uv run --extra dev ruff check .
 ```
 
@@ -245,7 +287,8 @@ Project layout:
 
 ```
 lettereye/
-  ai/          decision engine (Jev-style typed decisions), fact extraction, Ollama service
+  ai/          decision engine (Jev-style typed decisions), fact extraction, providers (LangChain adapters,
+               presets, runtime adaptation), factory (builds each role on its provider), Ollama service
   ocr/         PDF/image loading, PP-OCRv6 (GPU), OCR LLM
   pipeline/    the processing pipeline, file naming, date parsing
   services/    inbox watcher, processing engine (incl. approve/correct/reject/undo), updater
@@ -254,13 +297,19 @@ lettereye/
   insights.py  metrics from the feedback log
   dataset.py   training-data export
   settings.py  settings model + storage
+  api_keys.py  API keys of the providers (DPAPI / user-only file)
 .github/workflows/release.yml   test → build (Windows, macOS) → smoke test → Velopack → GitHub release
 tests/
 ```
 
 ## Troubleshooting
 
-* **"Ollama is not reachable"** – start Ollama (Windows: from the Start menu, it then sits in the tray).
+* **"Ollama is not reachable"** – start Ollama (Windows: from the Start menu, it then sits in the tray), or let
+  the models run on an API provider (Settings → AI models → *Runs on*).
+* **"No API key for … yet" / "rejected the API key"** – Settings → AI models → edit the provider, paste the key,
+  *Test connection*.
+* **Decisions show "model's estimate"** – the API returns no token probabilities (Anthropic, Gemini, reasoning
+  models); see *How the decision model gets its probabilities* above.
 * **Model shows "partly on CPU"** – the model does not fit into your GPU memory; pick a smaller one in Settings → AI models.
 * **Fast OCR runs on CPU on Windows** – update the graphics driver (DirectML needs Windows 10 1903+ with a DX12 GPU).
 * **Linux: CUDA not used for fast OCR** – install the CUDA 12 runtime and cuDNN 9, or ignore it: OCR on the CPU is still fast.

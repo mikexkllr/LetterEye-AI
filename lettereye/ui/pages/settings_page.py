@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import threading
+
 from nicegui import run, ui
 
 from ... import __version__, paths
 from ...ai.ollama_service import OllamaService
 from ...gpu import ONNX_DEVICE_LABELS, best_onnx_device, detect_gpus, onnx_providers
 from ...pipeline.filing import FILENAME_TOKENS, FOLDER_TOKENS, FilingValues, build_relative_path
+from ...services.engine import LIVE_SETTINGS
 from ...settings import LANGUAGES, DocumentType, Settings, default_document_types
 from ..context import ctx
 from ..models_panel import ModelsPanel
+from ..providers_panel import AiDraft, ProvidersPanel
 from ..updates import updates_card
 from ..widgets import card, folder_field, open_path, page_header
 
@@ -23,8 +27,11 @@ def page() -> None:
     def set_(key: str, value) -> None:
         if draft.get(key) != value:
             draft[key] = value
-            dirty["value"] = True
-            footer.set_visibility(True)
+            mark_dirty()
+
+    def mark_dirty() -> None:
+        dirty["value"] = True
+        footer.set_visibility(True)
 
     with ui.column().classes("le-page"):
         page_header("Settings", "Everything LetterEye needs, in one place. Changes apply after you save.")
@@ -63,27 +70,50 @@ def page() -> None:
                           on_change=lambda e: set_("recursive_watch", e.value))
 
             # ------------------------------------------------------------------ models
-            with ui.tab_panel(t_models).classes("p-0"), card("p-6 gap-4"):
-                with ui.row().classes("w-full items-end gap-3"):
-                    url = ui.input("Ollama address", value=draft["ollama_url"],
-                                   on_change=lambda e: set_("ollama_url", e.value)).props("outlined dense").classes("w-80")
+            with ui.tab_panel(t_models).classes("p-0"), ui.column().classes("w-full gap-5"):
+                ai = AiDraft(draft, set_)
+                ai.on_change(lambda: mark_dirty())
+                with card("p-6 gap-3"):
+                    ui.label("Where the AI runs").classes("le-section-title")
+                    ui.label("Local models on Ollama are built in – nothing leaves this computer. You can also bring "
+                             "your own API key: any OpenAI-compatible API (OpenAI, OpenRouter, Groq, Mistral, DeepSeek, "
+                             "LM Studio, vLLM, …), Anthropic or Google Gemini. Every model call goes through LangChain.") \
+                        .classes("le-muted text-sm")
+                    with ui.row().classes("w-full items-end gap-3"):
+                        url = ui.input("Ollama address (this computer)", value=draft["ollama_url"],
+                                       on_change=lambda e: set_("ollama_url", e.value)).props("outlined dense").classes("w-80")
 
-                    async def test_connection() -> None:
-                        version = await run.io_bound(OllamaService(url.value).version)
-                        ui.notify(f"Connected to Ollama {version}" if version else "Ollama is not reachable at that address",
-                                  type="positive" if version else "negative")
+                        async def test_connection() -> None:
+                            version = await run.io_bound(OllamaService(url.value).version)
+                            ui.notify(f"Connected to Ollama {version}" if version else "Ollama is not reachable at that address",
+                                      type="positive" if version else "negative")
 
-                    ui.button("Test", icon="lan", on_click=test_connection).props("outline color=primary")
-                ModelsPanel(draft["decision_model"], draft["ocr_llm_model"], draft["ocr_mode"], set_)
-                with ui.expansion("Advanced", icon="tune").classes("w-full"):
-                    with ui.row().classes("gap-4 items-start"):
-                        ui.input("Extraction model (empty = decision model)", value=draft["extraction_model"],
-                                 on_change=lambda e: set_("extraction_model", e.value)).props("outlined dense").classes("w-80")
-                        ui.input("Keep models loaded for", value=draft["keep_alive"],
-                                 on_change=lambda e: set_("keep_alive", e.value)).props(
-                            'outlined dense hint="e.g. 15m, 1h, -1 = forever"').classes("w-56")
-                        ui.select([4096, 8192, 16384, 32768], value=draft["num_ctx"], label="Context window (tokens)",
-                                  on_change=lambda e: set_("num_ctx", e.value)).props("outlined dense").classes("w-56")
+                        ui.button("Test", icon="lan", on_click=test_connection).props("outline color=primary")
+                    ProvidersPanel(ai)
+                with card("p-6 gap-4"):
+                    ModelsPanel(ai, draft["ocr_mode"])
+                    with ui.expansion("Advanced", icon="tune").classes("w-full"):
+                        with ui.row().classes("gap-4 items-start"):
+                            extraction_select = ui.select(
+                                {"": "Same as the decision model"}, value="", label="Sender/date/subject extraction runs on",
+                                on_change=lambda e: set_("extraction_provider", e.value or "")) \
+                                .props("outlined dense").classes("w-72")
+
+                            def extraction_options() -> None:
+                                options = {"": "Same as the decision model", **{p.id: p.name for p in ai.providers()}}
+                                value = draft["extraction_provider"] if draft["extraction_provider"] in options else ""
+                                extraction_select.set_options(options, value=value)
+
+                            extraction_options()
+                            ai.on_change(extraction_options)
+                            ui.input("Extraction model (empty = decision model)", value=draft["extraction_model"],
+                                     on_change=lambda e: set_("extraction_model", e.value)).props("outlined dense").classes("w-80")
+                        with ui.row().classes("gap-4 items-start"):
+                            ui.input("Keep Ollama models loaded for", value=draft["keep_alive"],
+                                     on_change=lambda e: set_("keep_alive", e.value)).props(
+                                'outlined dense hint="e.g. 15m, 1h, -1 = forever"').classes("w-56")
+                            ui.select([4096, 8192, 16384, 32768], value=draft["num_ctx"], label="Context window (tokens)",
+                                      on_change=lambda e: set_("num_ctx", e.value)).props("outlined dense").classes("w-56")
 
             # ------------------------------------------------------------------ OCR & GPU
             with ui.tab_panel(t_ocr).classes("p-0"), card("p-6 gap-4"):
@@ -165,6 +195,14 @@ def page() -> None:
                 ui.switch("Then add the unknown recipient to that worker automatically",
                           value=draft["auto_create_recipients"],
                           on_change=lambda e: set_("auto_create_recipients", e.value))
+                ui.separator()
+                ui.label("How the decision model reports probabilities").classes("le-section-title")
+                ui.radio({
+                    "auto": "Auto (recommended): token probabilities when the API returns them, otherwise the model's "
+                            "own estimate as structured output",
+                    "logprobs": "Token probabilities only (Ollama, OpenAI-compatible APIs) – stop instead of falling back",
+                    "structured": "Structured confidence: the model states a probability per option (works with every API)",
+                }, value=draft["decision_method"], on_change=lambda e: set_("decision_method", e.value))
 
             # ------------------------------------------------------------------ filing
             with ui.tab_panel(t_filing).classes("p-0"), card("p-6 gap-4"):
@@ -264,8 +302,13 @@ def page() -> None:
         except Exception as exc:
             ui.notify(f"Cannot save: {exc}", type="negative")
             return
-        old_theme = c.store.get().theme
+        old = c.store.get()
+        keys_changed = await run.io_bound(ai.apply_keys)  # before the settings, so a restart uses the new keys
         await run.io_bound(c.store.save, settings)
+        restarts = {k for k, v in settings.model_dump().items() if old.model_dump().get(k) != v} - LIVE_SETTINGS
+        if keys_changed and not restarts and c.engine.state == "running":
+            threading.Thread(target=c.engine.restart, name="restart", daemon=True).start()
+        old_theme = old.theme
         dirty["value"] = False
         footer.set_visibility(False)
         problems = settings.problems()

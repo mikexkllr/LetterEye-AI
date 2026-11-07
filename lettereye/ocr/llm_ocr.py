@@ -1,5 +1,7 @@
-"""OCR with a vision LLM on Ollama (GLM-OCR by default). Slower but much more robust than classic OCR
-on bad scans, handwriting-like fonts, stamps and tables. Only used when the decision model is unsure.
+"""OCR with a vision LLM (GLM-OCR on Ollama by default, or any vision model of a provider through LangChain).
+
+Slower but much more robust than classic OCR on bad scans, handwriting-like fonts, stamps and tables. Only
+used when the decision model is unsure (or always, in the "best quality" OCR mode).
 """
 
 from __future__ import annotations
@@ -50,15 +52,11 @@ def clean_ocr_output(text: str) -> str:
 
 
 class LlmOCR:
-    def __init__(self, base_url: str, model: str = "glm-ocr", *, keep_alive: str | int = "15m",
-                 max_side: int = 1600, llm: Any | None = None):
+    def __init__(self, llm: Any, model: str = "glm-ocr", *, max_side: int = 1600, device: str = "Ollama"):
+        """`llm`: a LangChain chat model that accepts images (anything with `stream(messages)`)."""
         self.model = model
         self.max_side = max_side
-        if llm is None:
-            from langchain_ollama import ChatOllama
-
-            llm = ChatOllama(model=model, base_url=base_url, temperature=0, keep_alive=keep_alive,
-                             num_ctx=16384, num_predict=3072, repeat_penalty=1.05)
+        self.device = device
         self._llm = llm
 
     def recognize(self, images: list[Image.Image]) -> OcrResult:
@@ -70,8 +68,8 @@ class LlmOCR:
             buffer = io.BytesIO()
             page.save(buffer, format="PNG")
             data_url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
-            message = HumanMessage(content=[
-                {"type": "image_url", "image_url": data_url},
+            message = HumanMessage(content=[  # the OpenAI image format, understood by every LangChain adapter
+                {"type": "image_url", "image_url": {"url": data_url}},
                 {"type": "text", "text": prompt_for(self.model)},
             ])
             pages.append(self._read_page(message))
@@ -79,7 +77,7 @@ class LlmOCR:
             text="\n\n".join(p for p in pages if p).strip(),
             source="ocr_llm",
             seconds=time.perf_counter() - start,
-            device="Ollama",
+            device=self.device,
             pages=len(images),
             details={"model": self.model},
         )
@@ -88,13 +86,14 @@ class LlmOCR:
         """Stream the transcription and stop as soon as the model starts repeating the page.
 
         Small OCR models sometimes finish the page and then begin again (often inside a markdown
-        block). Closing the stream makes Ollama stop generating, so no time is wasted on the copy.
+        block). Closing the stream makes the server stop generating, so no time is wasted on the copy.
         """
         text = ""
         checked_lines = 0
         for chunk in self._llm.stream([message]):
-            text += str(chunk.content)
-            if "\n" in str(chunk.content):
+            piece = chunk.text  # plain text also when a provider streams content blocks
+            text += piece
+            if "\n" in piece:
                 lines = _content_lines(text)
                 if len(lines) != checked_lines:
                     checked_lines = len(lines)

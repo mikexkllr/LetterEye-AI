@@ -10,9 +10,13 @@ dependencies = [
     # UI (native desktop window via pywebview; falls back to the browser)
     "nicegui>=3.17",
     "pywebview>=6.0",
-    # Local AI through Ollama + LangChain
-    "langchain-core>=1.6",
+    # All model calls go through LangChain: local models on Ollama, or your own API key for
+    # OpenAI-compatible, Anthropic-compatible and Google (Gemini) APIs
+    "langchain-core>=1.7",
     "langchain-ollama>=1.1",
+    "langchain-openai>=1.7",
+    "langchain-anthropic>=1.7",
+    "langchain-google-genai>=4.4",
     "ollama>=0.6",
     # Fast OCR: PP-OCRv6 on ONNX Runtime with a GPU execution provider per platform
     "rapidocr>=3.9",

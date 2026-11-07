@@ -7,6 +7,7 @@ from datetime import UTC, datetime, time
 from nicegui import run, ui
 
 from ...ai.ollama_service import OLLAMA_DOWNLOAD_URL, OllamaService, normalize_model_name
+from ...ai.providers import api_key_for, base_url, is_local, needs_key, remote_providers
 from ...gpu import ONNX_DEVICE_LABELS, best_onnx_device, detect_gpus
 from ..context import ctx
 from ..document_detail import show_document
@@ -45,7 +46,11 @@ async def toggle_engine() -> None:
 def page() -> None:
     c = ctx()
     with ui.column().classes("le-page"):
-        with page_header("Dashboard", "Letters are read, decided and filed by AI running on this computer."):
+        remote = remote_providers(c.store.get())
+        subtitle = ("Letters are read, decided and filed by AI running on this computer." if not remote else
+                    f"Letters are read, decided and filed by AI – partly on {', '.join(p.name for p in remote)} "
+                    "with your API key.")
+        with page_header("Dashboard", subtitle):
             with ui.row().classes("items-center gap-3 no-wrap shrink-0"):
                 mode_toggle()
                 ui.button("Test a letter", icon="science", on_click=open_test_dialog).props("outline color=primary")
@@ -199,14 +204,27 @@ def page() -> None:
 def _collect_health() -> dict:
     c = ctx()
     s = c.store.get()
-    ollama = OllamaService(s.ollama_url)
-    version = ollama.version()
-    installed = ollama.list_models() if version else []
-    loaded = {m.name: m for m in ollama.loaded_models()} if version else {}
+    roles = []  # (title, icon, role) for every model that is in use
+    for role, title, icon in (("decision", "Decision model", "psychology"), ("extraction", "Extraction model", "notes"),
+                              ("ocr_llm", "OCR LLM (fallback)", "document_scanner")):
+        if role not in s.active_roles():
+            continue
+        if role == "extraction" and s.role("extraction") == s.role("decision"):
+            continue  # the decision model does it
+        roles.append((title, icon, role))
+    servers: dict[str, dict] = {}  # Ollama servers in use, by address
+    for _title, _icon, role in roles:
+        provider = s.role(role)[0]
+        if provider is not None and provider.kind == "ollama" and base_url(provider) not in servers:
+            service = OllamaService(base_url(provider), api_key=api_key_for(provider, c.engine.keys))
+            version = service.version()
+            servers[base_url(provider)] = {
+                "version": version, "installed": service.list_models() if version else [],
+                "loaded": {m.name: m for m in service.loaded_models()} if version else {}}
+    keys = {p.id: bool(api_key_for(p, c.engine.keys)) for p in s.all_providers()}
     gpus = detect_gpus()
     device = c.engine.ocr_device or best_onnx_device(s.fast_ocr_device)
-    return {"settings": s, "version": version, "installed": installed, "loaded": loaded, "gpus": gpus,
-            "ocr_device": device}
+    return {"settings": s, "roles": roles, "servers": servers, "keys": keys, "gpus": gpus, "ocr_device": device}
 
 
 def _row(icon: str, title: str, value: str, ok: bool | None, hint: str = "") -> None:
@@ -222,28 +240,43 @@ def _row(icon: str, title: str, value: str, ok: bool | None, hint: str = "") -> 
 
 def _render_health(info: dict) -> None:
     s = info["settings"]
-    if not info["version"]:
-        _row("cloud_off", "Ollama", f"Not reachable at {s.ollama_url}", False)
-        ui.link("Download Ollama", OLLAMA_DOWNLOAD_URL, new_tab=True).classes("text-sm text-primary ml-8")
-    else:
-        _row("hub", "Ollama", f"Running · v{info['version']}", True)
+    local_url = s.ollama_url.rstrip("/")
+    for url, server in info["servers"].items():
+        name = "Ollama" if url == local_url else f"Ollama · {url}"
+        if not server["version"]:
+            _row("cloud_off", name, f"Not reachable at {url}", False)
+            if url == local_url:
+                ui.link("Download Ollama", OLLAMA_DOWNLOAD_URL, new_tab=True).classes("text-sm text-primary ml-8")
+        else:
+            _row("hub", name, f"Running · v{server['version']}", True)
 
-    def model_row(icon: str, title: str, name: str) -> None:
+    def ollama_row(icon: str, title: str, name: str, server: dict) -> None:
+        if not server["version"]:
+            _row(icon, title, f"{name} · Ollama not reachable", False)
+            return
         wanted = normalize_model_name(name)
-        present = any(normalize_model_name(m) == wanted for m in info["installed"])
-        key = next((k for k in info["loaded"] if normalize_model_name(k) == wanted), None)
+        present = any(normalize_model_name(m) == wanted for m in server["installed"])
+        key = next((k for k in server["loaded"] if normalize_model_name(k) == wanted), None)
         if not present:
             _row(icon, title, f"{name} · not downloaded", False, "Settings → AI models")
             return
         has_gpu = bool(info["gpus"])
-        placement = (info["loaded"][key].placement if has_gpu else "CPU") if key else "not loaded yet"
-        warn = has_gpu and key is not None and info["loaded"][key].gpu_share < 0.99
+        placement = (server["loaded"][key].placement if has_gpu else "CPU") if key else "not loaded yet"
+        warn = has_gpu and key is not None and server["loaded"][key].gpu_share < 0.99
         _row(icon, title, f"{name} · {placement}", None if warn else True,
              "Partly on CPU – a smaller model would be faster." if warn else "")
 
-    model_row("psychology", "Decision model", s.decision_model)
-    if s.ocr_mode != "fast_only":
-        model_row("document_scanner", "OCR LLM (fallback)", s.ocr_llm_model)
+    for title, icon, role in info["roles"]:
+        provider, model = s.role(role)
+        if provider is None:
+            _row(icon, title, "Provider removed", False, "Settings → AI models")
+        elif provider.kind == "ollama":
+            ollama_row(icon, title, model, info["servers"][base_url(provider)])
+        else:
+            has_key = info["keys"].get(provider.id) or not needs_key(provider)
+            where = "your network" if is_local(provider) else "cloud API"
+            _row("cloud" if not is_local(provider) else "lan", title, f"{model} · {provider.name} ({where})",
+                 bool(has_key), "" if has_key else "No API key – Settings → AI models")
     device = info["ocr_device"]
     label = ONNX_DEVICE_LABELS.get(device, device.replace("ExecutionProvider", ""))
     _row("bolt", "Fast OCR · PP-OCRv6", label, "cpu" not in device.lower() or None)

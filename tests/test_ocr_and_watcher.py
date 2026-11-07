@@ -77,6 +77,6 @@ def test_llm_ocr_stops_streaming_when_the_page_repeats():
                 yield AIMessageChunk(content=chunk)
 
     model = LoopingModel()
-    result = LlmOCR("http://unused", "glm-ocr", llm=model).recognize([Image.new("RGB", (100, 100), "white")])
+    result = LlmOCR(model, "glm-ocr").recognize([Image.new("RGB", (100, 100), "white")])
     assert result.text == "".join(page).strip()
     assert model.chunks_sent < 10  # stopped right after the repeat began

@@ -1,4 +1,7 @@
-"""Talking to the local Ollama server: health, installed models, downloads, GPU placement."""
+"""Managing an Ollama server: health, installed models, downloads, GPU placement.
+
+These are management calls, not model calls – generating text always goes through LangChain (providers.py).
+"""
 
 from __future__ import annotations
 
@@ -37,14 +40,15 @@ def normalize_model_name(name: str) -> str:
 
 
 class OllamaService:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, api_key: str = ""):
         self.base_url = base_url.rstrip("/")
-        self._client = ollama.Client(host=self.base_url, timeout=None)
+        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._client = ollama.Client(host=self.base_url, timeout=None, headers=self._headers)
 
     def version(self) -> str | None:
         """Ollama version, or None if the server is not reachable."""
         try:
-            response = httpx.get(f"{self.base_url}/api/version", timeout=2.5)
+            response = httpx.get(f"{self.base_url}/api/version", timeout=2.5, headers=self._headers)
             response.raise_for_status()
             return response.json().get("version", "unknown")
         except (httpx.HTTPError, ValueError):
@@ -78,7 +82,3 @@ class OllamaService:
             if on_progress:
                 total, done = part.total or 0, part.completed or 0
                 on_progress(part.status or "", (done / total) if total else None)
-
-    def warm_up(self, name: str, keep_alive: str = "15m") -> None:
-        """Load a model into (GPU) memory so the first letter is not slow."""
-        self._client.generate(model=name, prompt="", keep_alive=keep_alive)

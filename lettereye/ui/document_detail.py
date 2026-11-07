@@ -11,6 +11,12 @@ from . import theme
 from .context import ctx
 from .widgets import confidence_bar, open_path, probability_bars, relative_time, reveal_path, status_chip
 
+METHOD_LABELS = {
+    "logprobs": ("token probabilities", "Read from the model's token probabilities in one forward pass."),
+    "structured": ("model's estimate", "The API returns no token probabilities; the model stated a probability "
+                                       "per option as structured output."),
+    "both": ("mixed", "Partly token probabilities, partly the model's own estimate."),
+}
 DECISION_TITLES = {
     "recipient": "Recipient",
     "verify_recipient": "Verification",
@@ -85,8 +91,12 @@ def show_document(doc_id: int) -> None:
                                 ui.label(STAGE_TITLES.get(round_name, round_name)).classes("le-section-title mt-2")
                             for decision in (d for d in decisions if d.get("round", "decisions") == round_name):
                                 with ui.card().classes("le-card w-full p-4").props("flat"):
-                                    ui.label(DECISION_TITLES.get(decision["key"], decision["key"])).classes(
-                                        "text-xs uppercase tracking-wider le-muted font-semibold")
+                                    with ui.row().classes("w-full items-center justify-between"):
+                                        ui.label(DECISION_TITLES.get(decision["key"], decision["key"])).classes(
+                                            "text-xs uppercase tracking-wider le-muted font-semibold")
+                                        method = METHOD_LABELS.get(decision.get("method", ""))
+                                        if method:
+                                            ui.label(method[0]).classes("le-kbd text-xs").tooltip(method[1])
                                     probability_bars(decision)
                     with ui.tab_panel(t_text).classes("p-0 pt-2"):
                         ui.label(doc.ocr_text or "No text").classes("le-ocr w-full")

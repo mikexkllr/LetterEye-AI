@@ -5,7 +5,8 @@
 Output: dist/LetterEye/ (with LetterEye.exe on Windows) or dist/LetterEye.app (macOS). The release pipeline
 (.github/workflows/release.yml) turns this into an installer with automatic updates (Velopack).
 Ollama is not bundled – users install it once from https://ollama.com/download (the app's setup
-assistant walks them through it). Models are downloaded by the app into the user's data folder.
+assistant walks them through it), or use an API provider with their own key instead. Models are downloaded
+by the app into the user's data folder.
 """
 
 from __future__ import annotations
@@ -39,11 +40,22 @@ def main() -> None:
         "--collect-all", "onnxruntime",
         "--collect-all", "webview",
         "--collect-all", "velopack",
+        # LangChain adapters for every provider kind (imported lazily, when a provider of that kind is used)
         "--collect-submodules", "langchain_ollama",
         "--collect-submodules", "langchain_core",
+        "--collect-submodules", "langchain_openai",
+        "--collect-submodules", "langchain_anthropic",
+        "--collect-submodules", "langchain_google_genai",
+        "--collect-submodules", "tiktoken_ext",
         "--copy-metadata", "nicegui",
         "--copy-metadata", "langchain-core",
         "--copy-metadata", "langchain-ollama",
+        "--copy-metadata", "langchain-openai",
+        "--copy-metadata", "langchain-anthropic",
+        "--copy-metadata", "langchain-google-genai",
+        "--copy-metadata", "openai",
+        "--copy-metadata", "anthropic",
+        "--copy-metadata", "google-genai",
         "--copy-metadata", "rapidocr",
     ]
     if sys.platform == "darwin":
